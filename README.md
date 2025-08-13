@@ -473,6 +473,59 @@ Regularly backup these important files:
    tail -f logs/instapost.log
    ```
 
+## 🔍 Verifying App Permissions
+
+### Dropbox Permissions
+1. **Go to Dropbox App Console**:
+   - Visit: https://www.dropbox.com/developers/apps
+   - Select your app from the list
+
+2. **Check OAuth 2 Settings**:
+   - Under "OAuth 2" section, verify these scopes are enabled:
+     - `files.content.write` (required for uploading files)
+     - `sharing.write` (required for creating shared links)
+     - `account_info.read` (required for basic account info)
+
+3. **Check Access Token Permissions**:
+   - Go to: https://www.dropbox.com/account/connected_apps
+   - Find your app and click "View permissions"
+   - Ensure all required permissions are granted
+
+4. **Regenerate Token if Needed**:
+   - If permissions are incorrect, you'll need to:
+     1. Revoke the token in Dropbox account settings
+     2. Delete the local `db_token.json` file
+     3. Re-run the setup process
+
+### Facebook Developer Portal Permissions
+1. **Go to Facebook Developer Portal**:
+   - Visit: https://developers.facebook.com/apps/
+   - Select your app
+
+2. **Check App Review Status**:
+   - In the left sidebar, click "App Review"
+   - Ensure your app is in "Live" mode (not Development mode)
+   - Verify all required permissions are approved (with green checkmarks)
+
+3. **Verify Required Permissions**:
+   - Go to "App Settings" > "Advanced"
+   - Under "App Review for Live Apps", ensure these permissions are approved:
+     - `instagram_basic`
+     - `instagram_content_publish`
+     - `pages_show_list`
+     - `pages_read_engagement`
+
+4. **Check Token Permissions**:
+   - Go to: https://developers.facebook.com/tools/debug/accesstoken/
+   - Paste your access token and click "Debug"
+   - Verify all required permissions are listed under "Permissions"
+   - Check the token expiration date
+
+5. **Check Instagram Account Connection**:
+   - Go to: https://business.facebook.com/settings/instagram-api
+   - Ensure your Instagram Business Account is connected
+   - Verify the correct Facebook Page is linked
+
 ## 🔒 Security Best Practices
 
 ### Running as Non-Root
