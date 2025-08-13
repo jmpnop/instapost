@@ -45,6 +45,20 @@ A command-line tool for automating the scheduling and posting of images to Insta
 - Dropbox API credentials
 - Facebook Developer account with Instagram Graph API access
 
+1. **Install Homebrew**:
+   ```bash
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   ```
+2. **Install Python and UV**:
+   ```bash
+   brew install uv
+   uv python install 3.13.2
+   ```
+3. **Install Git**:
+   ```bash
+   brew install git
+   ```
+
 ### Setup
 
 1. **Clone the repository**:
@@ -56,17 +70,17 @@ A command-line tool for automating the scheduling and posting of images to Insta
 2. **Create and activate a virtual environment** (recommended):
    ```bash
    # macOS/Linux
-   python -m venv venv
-   source venv/bin/activate
+   uv venv
+   source .venv/bin/activate
    
    # Windows
-   python -m venv venv
-   .\venv\Scripts\activate
+   uv venv
+  .venv\Scripts\activate 
    ```
 
 3. **Install the package in development mode**:
    ```bash
-   pip install -e .
+   uv pip install -e .
    ```
 
 4. **Create required directories**:
@@ -83,8 +97,8 @@ A command-line tool for automating the scheduling and posting of images to Insta
    - API: Dropbox API
    - Access type: Full Dropbox
    - Permissions: files.content.write, files.content.read, sharing.write
-3. Note your App Key and App Secret
-4. Run the setup command to get your refresh token:
+3. Note your DROPBOX_APP_KEY and App DROPBOX_APP_SECRET
+4. Run the setup command to get your DROPBOX_REFRESH_TOKEN:
 
 ```bash
 python -m instapost.cli setup-dropbox
@@ -92,6 +106,8 @@ python -m instapost.cli setup-dropbox
 
 5. Follow the instructions to authorize the app and get your refresh token
 6. Add the refresh token to your `.env` file
+7. Navigate to the folder in Dropbox that will store your images. Copy its full path exactly as shown in Dropbox (e.g. /InstagramPosts or /Apps/InstaPost/images).
+8. Add the DROPBOX_FOLDER_PATH  to your `.env` file
 
 ### Setting up Facebook Graph API
 
@@ -99,12 +115,25 @@ python -m instapost.cli setup-dropbox
 2. Create a new app with the "Business" type
 3. Add the "Instagram Graph API" product to your app
 4. Connect your Instagram Business account to your Facebook Page
-5. Generate a long-lived access token with the following permissions:
+5. In the App Dashboard → Settings → Basic, copy your:
+   FACEBOOK_APP_ID
+   FACEBOOK_APP_SECRET
+6. Go to Tools → Access Token Tool. Generate a short-lived access token with the following permissions:
    - instagram_basic
    - instagram_content_publish
    - pages_read_engagement
-6. Find your Instagram Business Account ID using the [Graph API Explorer](https://developers.facebook.com/tools/explorer/)
-7. Add all credentials to your `.env` file
+7. Exchange it for a long-lived token using: 
+```bash
+curl -X GET \
+"https://graph.facebook.com/v18.0/oauth/access_token?  
+ grant_type=fb_exchange_token&  
+ client_id=FACEBOOK_APP_ID&  
+ client_secret=FACEBOOK_APP_SECRET&  
+ fb_exchange_token=SHORT_LIVED_TOKEN"
+The response will contain your long-term FACEBOOK_ACCESS_TOKEN
+```
+8. Find your INSTAGRAM_BUSINESS_ACCOUNT_ID using the [Graph API Explorer](https://developers.facebook.com/tools/explorer/)
+9. Add all credentials to your `.env` file
 
 ### Environment Variables
 
@@ -117,6 +146,7 @@ DROPBOX_APP_KEY=your_dropbox_app_key         # From Dropbox App Console -> App K
 DROPBOX_APP_SECRET=your_dropbox_app_secret   # From Dropbox App Console -> App Secret
 # 2. Get this by running: python -m instapost.cli setup-dropbox
 DROPBOX_REFRESH_TOKEN=your_dropbox_refresh_token
+DROPBOX_FOLDER_PATH=your_dropbox_folder_path
 
 # Facebook/Instagram Configuration
 # 1. Get these from Facebook Developer Portal: https://developers.facebook.com/
@@ -325,37 +355,6 @@ python -m instapost.cli account-info
 ### Compatibility
 - Tested on macOS and Linux
 - Requires x86_64 or ARM64 architecture
-
-## 🔧 Environment Variables
-
-### Required Variables
-```
-# Dropbox
-DROPBOX_APP_KEY=your_dropbox_app_key
-DROPBOX_APP_SECRET=your_dropbox_app_secret
-DROPBOX_REFRESH_TOKEN=your_refresh_token
-
-# Facebook/Instagram
-FACEBOOK_APP_ID=your_app_id
-FACEBOOK_APP_SECRET=your_app_secret
-FACEBOOK_ACCESS_TOKEN=your_access_token
-INSTAGRAM_BUSINESS_ACCOUNT_ID=your_instagram_account_id
-
-# Application
-TIMEZONE=America/New_York  # Format: Continent/City (e.g., Europe/London, Asia/Tokyo)
-```
-
-### Optional Variables with Defaults
-```
-# Logging
-LOG_LEVEL=INFO  # DEBUG, INFO, WARNING, ERROR, CRITICAL
-LOG_FILE=logs/instapost.log
-
-# Application Behavior
-TEST_MODE=false  # Set to 'true' for immediate processing
-MAX_RETRIES=3    # Number of retry attempts for failed posts
-REQUEST_TIMEOUT=30  # API request timeout in seconds
-```
 
 ## Dependencies
 
