@@ -155,30 +155,45 @@ def token_info(ctx: click.Context):
 
 @cli.command()
 def setup_dropbox():
-    """Set up Dropbox authentication and get refresh token."""
+    """Set up Dropbox authentication and get a refresh token."""
+    click.echo("Starting Dropbox authentication flow...\n")
+    
     try:
-        # Generate authentication flow
+        # Generate the authorization URL
         auth_url, auth_flow = DropboxClient.generate_auth_flow()
         
-        # Display instructions
+        # Print instructions for the user
         click.echo("1. Go to the following URL in your browser:")
         click.echo(auth_url)
         click.echo("2. Click 'Allow' (you might need to log in first).")
-        click.echo("3. Copy the authorization code.")
+        click.echo("3. Copy the authorization code.\n")
         
-        # Get authorization code
+        # Get the authorization code from the user
         auth_code = click.prompt("Enter the authorization code")
         
-        # Complete authentication flow
+        # Complete the authentication flow
         refresh_token = DropboxClient.complete_auth_flow(auth_flow, auth_code)
         
-        # Display refresh token
-        click.echo("\nDropbox authentication successful!")
-        click.echo(f"Refresh Token: {refresh_token}")
-        click.echo("\nAdd this token to your .env file as DROPBOX_REFRESH_TOKEN.")
+        if refresh_token:
+            click.echo("\n✅ Success! Here's your refresh token:")
+            click.echo("-" * 50)
+            click.echo(refresh_token)
+            click.echo("-" * 50)
+            
+            click.echo("\nAdd this to your .env file:")
+            click.echo(f"DROPBOX_REFRESH_TOKEN={refresh_token}")
+            
+            click.echo("\n🔒 Keep this token secure and do not share it with anyone!")
+            return refresh_token
+        else:
+            click.echo("\n❌ Failed to obtain refresh token. Please try again.", err=True)
+            return None
+            
     except Exception as e:
-        click.echo(f"Error setting up Dropbox authentication: {e}", err=True)
-        sys.exit(1)
+        click.echo(f"\n❌ Error setting up Dropbox authentication: {e}", err=True)
+        if hasattr(e, 'response') and hasattr(e.response, 'content'):
+            click.echo(f"Response content: {e.response.content}", err=True)
+        return None
 
 
 def main():

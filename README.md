@@ -85,24 +85,61 @@ A command-line tool for automating the scheduling and posting of images to Insta
 
 ## Configuration
 
-### Setting up Dropbox API
+### Dropbox Setup
 
-1. Go to the [Dropbox Developer Console](https://www.dropbox.com/developers/apps)
-2. Create a new app with the following settings:
-   - API: Dropbox API
-   - Access type: Full Dropbox
-   - Permissions: files.content.write, files.content.read, sharing.write
-3. Note your DROPBOX_APP_KEY and App DROPBOX_APP_SECRET
-4. Run the setup command to get your DROPBOX_REFRESH_TOKEN:
+1. **Create a Dropbox App**:
+   - Go to the [Dropbox App Console](https://www.dropbox.com/developers/apps)
+   - Click "Create app"
+   - Choose "Scoped access"
+   - Choose "App folder" (recommended) or "Full Dropbox" access
+   - Enter a name for your app (e.g., "InstaPost")
+   - Click "Create app"
 
-```bash
-python -m instapost.cli setup-dropbox
-```
+2. **Configure App Permissions**:
+   - In your app's settings, go to the "Permissions" tab
+   - Enable these scopes:
+     - `files.content.write`
+     - `sharing.write`
+     - `account_info.read`
+   - Click "Submit" to save changes
 
-5. Follow the instructions to authorize the app and get your refresh token
-6. Add the refresh token to your `.env` file
-7. Navigate to the folder in Dropbox that will store your images. Copy its full path exactly as shown in Dropbox (e.g. /InstagramPosts or /Apps/InstaPost/images).
-8. Add the DROPBOX_FOLDER_PATH  to your `.env` file
+3. **Get Your App Credentials**:
+   - In your app's settings, go to the "Settings" tab
+   - Under "App key" and "App secret", click "Show" to reveal the values
+   - You'll need these values in the next step
+
+4. **Set Up Authentication**:
+   Run the setup command:
+   ```bash
+   python -m instapost.cli setup-dropbox
+   ```
+   
+   The command will:
+   1. Ask for your Dropbox app key and secret
+   2. Provide a URL to authorize the app
+   3. Generate an access token
+   4. Display instructions for adding the token to your `.env` file
+
+5. **Update Your `.env` File**:
+   - Open or create a `.env` file in the project root
+   - Add your Dropbox credentials:
+     ```
+     DROPBOX_APP_KEY=your_app_key_here
+     DROPBOX_APP_SECRET=your_app_secret_here
+     DROPBOX_ACCESS_TOKEN=your_access_token_here
+     ```
+   - Optionally, set a custom folder path:
+     ```
+     DROPBOX_FOLDER_PATH="/Your/Custom/Folder/Path"
+     ```
+
+### Troubleshooting Dropbox Authentication
+
+- **Access Token Expired**: Access tokens are short-lived. You'll need to generate a new one using the `setup-dropbox` command.
+- **Insufficient Permissions**: Ensure your app has the required scopes enabled in the Dropbox App Console.
+- **Invalid Token**: If you get an "invalid token" error, generate a new access token and update your `.env` file.
+
+For long-term access, consider setting up refresh tokens in your Dropbox app settings.
 
 ### Setting up Facebook Graph API
 
@@ -140,7 +177,7 @@ Create a `.env` file in the project root with the following variables:
 DROPBOX_APP_KEY=your_dropbox_app_key         # From Dropbox App Console -> App Key
 DROPBOX_APP_SECRET=your_dropbox_app_secret   # From Dropbox App Console -> App Secret
 # 2. Get this by running: python -m instapost.cli setup-dropbox
-DROPBOX_REFRESH_TOKEN=your_dropbox_refresh_token
+DROPBOX_ACCESS_TOKEN=your_dropbox_access_token
 DROPBOX_FOLDER_PATH=your_dropbox_folder_path
 
 # Facebook/Instagram Configuration
@@ -340,111 +377,6 @@ python -m instapost.cli account-info
    - Verify network connectivity to required services
    - Check for any rate limiting from APIs
 
-## 📋 Version Information
-
-### Supported Versions
-- **Python**: 3.13+ (recommended: 3.13.0 or later)
-- **Facebook Graph API**: v18.0 (latest stable)
-- **Dropbox API**: v2
-
-### Compatibility
-- Tested on macOS and Linux
-- Requires x86_64 or ARM64 architecture
-
-## Dependencies
-
-### Python Version
-- Python 3.13+ (recommended: 3.13.0 or later)
-
-### Python Packages
-Install all required packages with:
-```bash
-pip install -e .
-```
-
-Or manually install the dependencies:
-```bash
-pip install \
-    dropbox \
-    python-dotenv \
-    requests \
-    pydantic \
-    click \
-    python-dateutil \
-    Pillow \
-    watchdog \
-    psutil
-```
-
-### System Dependencies
-- A running system with a stable internet connection
-- Sufficient disk space for your images and logs
-- Proper file system permissions for the application to read/write files
-
-## 🚀 Complete Workflow Example
-
-1. **Set up your environment**:
-   ```bash
-   # Copy and edit .env file
-   cp .env.example .env
-   # Edit .env with your credentials
-   ```
-
-2. **Start all services** (in separate terminal windows):
-   ```bash
-   # Terminal 1 - Watcher
-   python -m instapost.watcher ./images
-   
-   # Terminal 2 - Scheduler
-   python -m instapost.scheduler
-   
-   # Terminal 3 - Mover
-   python -m instapost.mover
-   ```
-
-3. **Add images to monitor**:
-   ```bash
-   # Copy images to the watched directory
-   cp your_images/*.jpg ./images/
-   ```
-
-## 🔒 Security Notes
-
-1. **Secure your `.env` file**:
-   - Never commit it to version control (it's in .gitignore by default)
-   - Set restrictive permissions: `chmod 600 .env`
-
-2. **API Rate Limits**:
-   - Instagram Graph API has rate limits
-   - The app includes basic rate limiting, but monitor your usage
-
-3. **Token Security**:
-   - Keep your access tokens secure
-   - Rotate tokens periodically
-   - Revoke unused tokens from your Dropbox and Facebook app dashboards
-
-## 🛠 Maintenance
-
-### Logs
-- Logs are stored in the `logs/` directory
-- Rotate logs regularly to prevent disk space issues
-- Check logs for errors: `tail -f logs/instapost.log`
-
-### Cleanup
-```bash
-# Remove old processed files (older than 30 days)
-find processed/ -type f -mtime +30 -delete
-
-# Clean up log files
-find logs/ -type f -name "*.log" -mtime +7 -delete
-```
-
-### Backup
-Regularly backup these important files:
-- `.env` - Contains your API credentials
-- `schedule.json` - Your posting schedule
-- `processed.json` - Record of processed posts
-
 ## 📊 Monitoring
 
 1. **Check service status**:
@@ -520,7 +452,7 @@ Regularly backup these important files:
    - Ensure your Instagram Business Account is connected
    - Verify the correct Facebook Page is linked
 
-## 🔒 Security Best Practices
+## 🔒 Security Notes
 
 ### Running as Non-Root
 Never run the application as root. Instead:
