@@ -12,23 +12,73 @@ InstaPost's automation workflow consists of three main components that work toge
    - Adds new images to the posting schedule with full file paths
    - Supports common image formats: JPG, PNG, GIF, BMP, WebP
    - Updates `schedule.json` with new files and their posting times
+   - Uses the `WEEKLY_SCHEDULE` environment variable to determine posting times
+   - Automatically finds the next available time slot in the weekly schedule
 
 2. **Scheduler** (`scheduler.py`)
    - Processes the posting schedule from `schedule.json`
    - Uses full file paths for reliable file access
+   - Respects the weekly schedule defined in `WEEKLY_SCHEDULE`
+   - Supports two modes:
+     - **Production Mode**: Follows the weekly schedule exactly
+     - **Test Mode**: Processes all posts immediately when `TEST_MODE=True`
    - Handles the posting workflow:
      1. Locates the image using the stored path
      2. Uploads the image to Dropbox
      3. Posts to Instagram using the Facebook Graph API
      4. Records successful posts in `processed.json`
+   - Test Mode: When `TEST_MODE=True`, processes all posts immediately
+   - Production Mode: Follows the weekly schedule in `WEEKLY_SCHEDULE`
    - Includes comprehensive error handling and logging
-   - Runs continuously, checking for scheduled posts
+   - Runs continuously, checking for scheduled posts at minute intervals
 
 3. **Mover** (`mover.py`)
    - Monitors the `processed.json` file
    - Moves successfully posted images to a processed directory
    - Helps keep the source directory clean and organized
    - Maintains file organization by date
+
+## Process Management
+
+InstaPost includes process management features to ensure reliable operation:
+
+- **Single Instance Protection**: Each component (watcher, scheduler, mover) ensures only one instance runs at a time
+- **Visual Feedback**: Blinking eye (👁️) animation shows when components are actively monitoring
+- **Graceful Shutdown**: Properly handles keyboard interrupts (Ctrl+C) to clean up resources
+
+## Core Components
+
+### 1. Watcher ([watcher.py])
+- Monitors a specified directory for new image files
+- **Visual Feedback**: Displays a blinking eye (👁️) animation when idle
+- **Single Instance**: Ensures only one watcher process runs at a time
+- Automatically copies new images to the `images` directory
+- Adds new images to the posting schedule with full file paths
+- Supports common image formats: JPG, PNG, GIF, BMP, WebP
+- Updates [schedule.json](cci:7://file:///Users/pasha/PycharmProjects/INSTAPOST/schedule.json:0:0-0:0) with new files and their posting times
+
+### 2. Scheduler ([scheduler.py])
+- Processes the posting schedule from [schedule.json](cci:7://file:///Users/pasha/PycharmProjects/INSTAPOST/schedule.json:0:0-0:0)
+- **Visual Feedback**: Shows a blinking eye (👁️) animation while waiting between scheduled posts
+- **Single Instance**: Prevents multiple scheduler processes from running simultaneously
+- Uses full file paths for reliable file access
+- Handles the posting workflow:
+  1. Locates the image using the stored path
+  2. Uploads the image to Dropbox
+  3. Posts to Instagram using the Facebook Graph API
+  4. Records successful posts in `processed.json`
+- Test Mode: When `TEST_MODE=True`, processes all posts immediately
+- Production Mode: Follows the weekly schedule in `WEEKLY_SCHEDULE`
+- Includes comprehensive error handling and logging
+- Runs continuously, checking for scheduled posts at minute intervals
+
+### 3. Mover ([mover.py])
+- Monitors the `processed.json` file
+- **Visual Feedback**: Displays a blinking eye (👁️) animation when idle
+- **Single Instance**: Ensures only one mover process runs at a time
+- Moves successfully posted images to a processed directory
+- Helps keep the source directory clean and organized
+- Maintains file organization by date
 
 ## Package Structure
 
@@ -159,6 +209,26 @@ python -m instapost.mover images processed
 ```
 - Moves processed files from `images` to `processed` directory
 - Only moves files that were successfully posted
+
+## Test Mode
+
+InstaPost includes a test mode for development and testing:
+
+1. **Enabling Test Mode**:
+   ```bash
+   TEST_MODE=True python -m instapost.scheduler
+   ```
+
+2. **Test Mode Behavior**:
+   - Processes all posts immediately, regardless of scheduled time
+   - Logs detailed information about processing
+   - Schedules new posts for 5 minutes in the future
+   - Shows clear indicators in the logs when in test mode
+
+3. **Production Mode**:
+   - Runs without the `TEST_MODE` environment variable
+   - Follows the weekly schedule defined in `WEEKLY_SCHEDULE`
+   - Only processes posts at their scheduled times
 
 ## Troubleshooting
 

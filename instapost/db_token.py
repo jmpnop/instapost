@@ -7,7 +7,10 @@ import argparse
 import time
 
 
-def load_env(file_path='.env'):
+def load_env(file_path=None):
+    if file_path is None:
+        # Look for .env in the project root (one level up from instapost/)
+        file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
     """Load key-value pairs from .env file into os.environ."""
     try:
         with open(file_path, 'r') as f:
@@ -36,6 +39,7 @@ def format_expiration(expires_at):
 
 def store_token(access_token, expires_in, scopes, uid, account_id):
     """Store access token, expiration, and additional info in db_token.json."""
+    from .utils import PROJECT_ROOT
     expires_at = time.time() + expires_in
     token_data = {
         "access_token": access_token,
@@ -44,15 +48,18 @@ def store_token(access_token, expires_in, scopes, uid, account_id):
         "uid": uid,
         "account_id": account_id
     }
-    with open('db_token.json', 'w') as f:
+    token_file = PROJECT_ROOT / 'db_token.json'
+    with open(token_file, 'w') as f:
         json.dump(token_data, f)
-    print("Stored new access token and info in db_token.json.")
+    print(f"Stored new access token and info in {token_file}")
 
 
 def load_stored_token():
     """Load stored access token and info if valid."""
+    from .utils import PROJECT_ROOT
+    token_file = PROJECT_ROOT / 'db_token.json'
     try:
-        with open('db_token.json', 'r') as f:
+        with open(token_file, 'r') as f:
             token_data = json.load(f)
         access_token = token_data.get('access_token')
         expires_at = token_data.get('expires_at', 0)

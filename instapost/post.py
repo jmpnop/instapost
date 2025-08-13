@@ -9,29 +9,15 @@ import subprocess
 
 def load_env(file_path=None, verbose=False):
     """Load key-value pairs from .env file into os.environ."""
-    # Try multiple possible locations for the .env file
-    possible_paths = [
-        file_path,  # Explicit path if provided
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'),  # Project root
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'),  # Current directory
-        '.env'  # Current working directory
-    ]
-    
-    env_path = None
-    for path in possible_paths:
-        if path and os.path.isfile(path):
-            env_path = path
-            break
-    
-    if not env_path:
-        print("Error: Could not find .env file in any of the expected locations", file=sys.stderr)
-        sys.exit(1)
+    if file_path is None:
+        # Look for .env in the project root (one level up from instapost/)
+        file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
     
     try:
         if verbose:
-            print(f"Loading environment from: {os.path.abspath(env_path)}")
+            print(f"Loading environment from: {os.path.abspath(file_path)}")
         
-        with open(env_path, 'r') as f:
+        with open(file_path, 'r') as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith('#'):
@@ -47,7 +33,7 @@ def load_env(file_path=None, verbose=False):
                                 else:
                                     print(f"Loaded {key}={value}")
     except Exception as e:
-        print(f"Error loading .env from {env_path}: {e}", file=sys.stderr)
+        print(f"Error loading .env from {file_path}: {e}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -120,6 +106,13 @@ def post_to_instagram(access_token, image_url, caption, ig_account_id, verbose=F
         if verbose:
             print(error_msg)
         return None, error_msg
+        
+    if verbose:
+        print(f"\n=== Instagram Post Debug ===")
+        print(f"Account ID: {ig_account_id}")
+        print(f"Access Token: {access_token[:10]}...")
+        print(f"Image URL: {image_url}")
+        print(f"Caption: {caption}")
 
     # Step 1: Create media container
     create_url = f"https://graph.facebook.com/v20.0/{ig_account_id}/media"
@@ -143,17 +136,29 @@ def post_to_instagram(access_token, image_url, caption, ig_account_id, verbose=F
         if verbose:
             print(f"Media container created: {container_id}")
     except urllib.error.HTTPError as e:
+        error_details = {}
+        try:
+            error_data = e.read().decode('utf-8')
+            error_details = json.loads(error_data) if error_data else {}
+            if verbose:
+                print(f"\n=== API Error Response ===")
+                print(f"Status: {e.code} {e.reason}")
+                print(f"Headers: {dict(e.headers)}")
+                print(f"Response: {error_data}")
+        except Exception as read_error:
+            if verbose:
+                print(f"Failed to read error details: {read_error}")
+        
         error_msg = f"HTTP Error during create: {e.code} - {e.reason}"
-        if verbose:
-            print(error_msg)
-            try:
-                error_data = json.loads(e.read().decode('utf-8'))
-                error_details = json.dumps(error_data, indent=2)
-                print(f"Error Details: {error_details}")
-                error_msg += f"\n{error_details}"
-            except Exception as read_error:
-                if verbose:
-                    print(f"Failed to read error details: {read_error}")
+        if 'error' in error_details:
+            error_msg += f"\nError Type: {error_details.get('error', {}).get('type', 'Unknown')}"
+            error_msg += f"\nError Code: {error_details.get('error', {}).get('code', 'Unknown')}"
+            error_msg += f"\nMessage: {error_details.get('error', {}).get('message', 'No message')}"
+            if 'error_subcode' in error_details.get('error', {}):
+                error_msg += f"\nSubcode: {error_details['error']['error_subcode']}"
+            if 'error_user_msg' in error_details.get('error', {}):
+                error_msg += f"\nUser Message: {error_details['error']['error_user_msg']}"
+        
         return None, error_msg
     except Exception as e:
         error_msg = f"Unexpected Error during create: {str(e)}"

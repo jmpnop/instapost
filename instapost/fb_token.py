@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 import argparse
 
 
-def load_env(file_path='../.env'):
+def load_env(file_path=None):
+    if file_path is None:
+        # Look for .env in the project root (one level up from instapost/)
+        file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
     """Load key-value pairs from .env file into os.environ."""
     try:
         with open(file_path, 'r') as f:

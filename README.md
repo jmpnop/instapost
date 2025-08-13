@@ -4,7 +4,11 @@ A command-line tool for automating the scheduling and posting of images to Insta
 
 ## Features
 
+- **Visual Feedback**: Blinking eye animation shows when watcher and scheduler are idle
+- **Process Safety**: Prevents multiple instances of watcher, scheduler, and mover
 - **Automated Scheduling**: Monitor directories and automatically schedule posts
+- **Test Mode**: Process posts immediately for testing with `TEST_MODE=True`
+- **Flexible Scheduling**: Schedule posts for specific times or use default intervals
 - **Reliable Uploads**: Upload images to Dropbox with automatic link generation
 - **Instagram Integration**: Post images to Instagram using Facebook Graph API
 - **Robust Error Handling**: Comprehensive logging and error recovery
@@ -28,6 +32,7 @@ InstaPost provides a powerful automation system for scheduling and managing Inst
 ### Prerequisites
 
 - Python 3.13 or higher
+- Required packages: `psutil` (for process checking), `Pillow` (for image validation), `watchdog` (for file system monitoring)
 - Dropbox API app with appropriate permissions
 - Facebook Developer account with Instagram Graph API access
 - Instagram Business or Creator account connected to a Facebook Page
@@ -43,6 +48,33 @@ pip install -e .
 ## Configuration
 
 1. Create a `.env` file in your project directory based on the provided `.env.example`:
+
+2. **Weekly Schedule**
+   The `WEEKLY_SCHEDULE` environment variable defines posting times for each weekday:
+   - Format: `WEEKLY_SCHEDULE="0:07:00,2:11:00,4:17:00,5:09:00,6:18:00"`
+   - Days: 0=Monday, 1=Tuesday, ..., 6=Sunday
+   - Times are in 24-hour format (HH:MM:SS)
+   - The above example means:
+     - Monday at 07:00
+     - Wednesday at 11:00
+     - Friday at 17:00
+     - Saturday at 09:00
+     - Sunday at 18:00
+
+3. **Token Management**
+   - Access tokens are stored in `db_token.json` in the project root
+   - This file is automatically managed by the application
+   - It's included in `.gitignore` for security
+
+4. **Git Ignored Files**
+   The following files are ignored by git:
+   - `images/` - Directory containing images to be posted
+   - `schedule.json` - Current posting schedule
+   - `processed.json` - Log of processed posts
+   - `db_token.json` - API access tokens
+   - `.env` - Environment variables
+   - `*.log` - Log files
+   - `scheduler copy.py` - Backup files
 
 ```
 # Dropbox API credentials

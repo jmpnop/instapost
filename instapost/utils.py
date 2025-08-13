@@ -1,6 +1,8 @@
 import json
 import logging
+import os
 import sys
+import psutil
 from pathlib import Path
 import time
 
@@ -60,6 +62,47 @@ def show_idle_animation(symbol='👁️'):
     """Display an idle animation in the console."""
     sys.stdout.write(f"\r{symbol} Idle... ")
     sys.stdout.flush()
-    time.sleep(0.5)
-    sys.stdout.write("\r          \r")
+    time.sleep(1.0)  # Show the eye for 1 second
+    sys.stdout.write("\r" + " " * 15 + "\r")  # Clear the line
     sys.stdout.flush()
+    time.sleep(1.0)  # Pause for 1 second before next blink
+
+def is_process_running(process_name):
+    """Check if there is any running process that contains the given name."""
+    # Iterate over all running processes
+    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            # Check if process name or command line contains the given name
+            if (process_name.lower() in proc.info['name'].lower() or 
+                (proc.info['cmdline'] and process_name.lower() in ' '.join(proc.info['cmdline']).lower())):
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    return False
+
+def ensure_single_instance(component_name):
+    """Ensure only one instance of the component is running."""
+    if is_process_running(f'python.*{component_name}'):
+        print(f"Error: Another instance of {component_name} is already running.")
+        print("Please stop it before starting a new one.")
+        sys.exit(1)
+import psutil
+import sys
+
+def is_process_running(process_name):
+    """Check if there is any running process that contains the given name."""
+    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            if (process_name.lower() in proc.info['name'].lower() or 
+                (proc.info['cmdline'] and process_name.lower() in ' '.join(proc.info['cmdline']).lower())):
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    return False
+
+def ensure_single_instance(component_name):
+    """Ensure only one instance of the component is running."""
+    if is_process_running(f'python.*{component_name}'):
+        print(f"Error: Another instance of {component_name} is already running.")
+        print("Please stop it before starting a new one.")
+        sys.exit(1)

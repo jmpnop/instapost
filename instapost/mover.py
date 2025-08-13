@@ -2,13 +2,16 @@ import sys
 import time
 import shutil
 from pathlib import Path
-from .utils import load_json, setup_logging, show_idle_animation, PROJECT_ROOT
+from .utils import load_json, setup_logging, show_idle_animation, PROJECT_ROOT, ensure_single_instance
 
 logger = setup_logging('mover')
 
 PROCESSED_FILE = "processed.json"
 
 def move_processed_files(source_dir, dest_dir):
+    # Ensure only one instance is running
+    ensure_single_instance('mover')
+    
     src_path = Path(source_dir)
     dst_path = Path(dest_dir)
 
@@ -25,7 +28,6 @@ def move_processed_files(source_dir, dest_dir):
             return
 
     moved = set()
-
     while True:
         try:
             processed = load_json(PROCESSED_FILE)
@@ -43,4 +45,7 @@ def move_processed_files(source_dir, dest_dir):
         time.sleep(5)
 
 if __name__ == '__main__':
+    if len(sys.argv) != 3:
+        print(f"Usage: {sys.argv[0]} <source_dir> <dest_dir>")
+        sys.exit(1)
     move_processed_files(sys.argv[1], sys.argv[2])

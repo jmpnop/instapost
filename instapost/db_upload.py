@@ -10,29 +10,17 @@ from datetime import datetime
 import sys
 
 
-def load_env(file_path=None):
+def load_env(file_path=None, verbose=False):
     """Load key-value pairs from .env file into os.environ."""
-    # Try multiple possible locations for the .env file
-    possible_paths = [
-        file_path,  # Explicit path if provided
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'),  # Project root
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'),  # Current directory
-        '.env'  # Current working directory
-    ]
-    
-    env_path = None
-    for path in possible_paths:
-        if path and os.path.isfile(path):
-            env_path = path
-            break
-    
-    if not env_path:
-        print("Error: Could not find .env file in any of the expected locations")
-        sys.exit(-1)
+    if file_path is None:
+        # Look for .env in the project root (one level up from instapost/)
+        file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
     
     try:
-        print(f"Loading environment from: {env_path}")
-        with open(env_path, 'r') as f:
+        if verbose:
+            print(f"Loading environment from: {os.path.abspath(file_path)}")
+        
+        with open(file_path, 'r') as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith('#'):
@@ -42,13 +30,15 @@ def load_env(file_path=None):
                         value = value.strip()
                         if key and value:
                             os.environ[key] = value
-                            if key in ['DROPBOX_APP_KEY', 'DROPBOX_APP_SECRET', 'DROPBOX_REFRESH_TOKEN', 'FACEBOOK_ACCESS_TOKEN']:
-                                print(f"Loaded {key}=[REDACTED]")
-                            else:
-                                print(f"Loaded {key}={value}")
+                            if verbose:
+                                if any(secret in key.upper() for secret in ['TOKEN', 'SECRET', 'KEY', 'PASSWORD']):
+                                    print(f"Loaded {key}=[REDACTED]")
+                                else:
+                                    print(f"Loaded {key}={value}")
     except Exception as e:
-        print(f"Error loading .env from {env_path}: {e}")
-        sys.exit(-1)
+        print(f"Error loading .env from {file_path}: {e}")
+        return False
+    return True
 
 
 def format_expiration(expires_at):
@@ -62,6 +52,7 @@ def format_expiration(expires_at):
 
 def store_token(access_token, expires_in, scopes, uid, account_id, verbose=False):
     """Store access token, expiration, and additional info in db_token.json."""
+    from .utils import PROJECT_ROOT
     expires_at = time.time() + expires_in
     token_data = {
         "access_token": access_token,
@@ -70,16 +61,19 @@ def store_token(access_token, expires_in, scopes, uid, account_id, verbose=False
         "uid": uid,
         "account_id": account_id
     }
-    with open('db_token.json', 'w') as f:
+    token_file = PROJECT_ROOT / 'db_token.json'
+    with open(token_file, 'w') as f:
         json.dump(token_data, f)
     if verbose:
-        print("Stored new access token and info in db_token.json.")
+        print(f"Stored new access token and info in {token_file}")
 
 
 def load_stored_token():
     """Load stored access token and info if valid."""
+    from .utils import PROJECT_ROOT
+    token_file = PROJECT_ROOT / 'db_token.json'
     try:
-        with open('db_token.json', 'r') as f:
+        with open(token_file, 'r') as f:
             token_data = json.load(f)
         access_token = token_data.get('access_token')
         expires_at = token_data.get('expires_at', 0)

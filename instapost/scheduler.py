@@ -4,11 +4,12 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from instapost.utils import load_json, save_json, PROJECT_ROOT, setup_logger
+from instapost.utils import load_json, save_json, PROJECT_ROOT, setup_logger, ensure_single_instance, show_idle_animation
+from instapost.settings import TIMEZONE, WEEKLY_SCHEDULE
 
 # Set up logging
 logger = setup_logger('scheduler')
@@ -18,8 +19,138 @@ SCHEDULE_FILE = PROJECT_ROOT / "schedule.json"
 PROCESSED_FILE = PROJECT_ROOT / "processed.json"
 IMAGES_DIR = PROJECT_ROOT / "images"
 
+def run_scheduler():
+    """Run the scheduling loop."""
+    logger.info("🚀 Running scheduler loop")
+    logger.info("👀 Watching for scheduled posts...")
+    
+    # Ensure required files exist
+    if not os.path.exists(SCHEDULE_FILE):
+        save_json(SCHEDULE_FILE, [])
+    if not os.path.exists(PROCESSED_FILE):
+        save_json(PROCESSED_FILE, [])
+    
+    try:
+        while True:
+            current_time = datetime.now(TIMEZONE)
+            logger.debug(f"Checking schedule at {current_time}")
+            
+            # Process any scheduled posts that are due
+            process_scheduled_posts()
+            
+            # Show idle animation
+            show_idle_animation()
+            
+            # Always check at the start of the next minute
+            next_minute = (current_time + timedelta(minutes=1)).replace(second=0, microsecond=0)
+            sleep_seconds = (next_minute - current_time).total_seconds()
+            
+            if sleep_seconds > 0:
+                logger.debug(f"Sleeping for {sleep_seconds:.1f} seconds")
+                # Show idle animation while waiting
+                start_time = time.time()
+                while time.time() - start_time < min(sleep_seconds, 60):
+                    show_idle_animation()
+            else:
+                # In case we're already past the next minute
+                show_idle_animation()
+                time.sleep(1)
+            
+            # Process any scheduled posts that are due
+            process_scheduled_posts()
+            
+    except KeyboardInterrupt:
+        logger.info("Scheduler stopped by user")
+    except Exception as e:
+        logger.error(f"Error in scheduler: {e}", exc_info=True)
+    finally:
+        logger.info("Scheduler stopped")
+
+# [Rest of the file remains the same...]
+
 # Ensure required directories exist
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+# Timezone and schedule configuration
+
+# Test mode - overrides the weekly schedule when enabled
+TEST_MODE = os.getenv('TEST_MODE', 'False').lower() in ('true', '1', 't')
+if TEST_MODE:
+    # In test mode, we'll process past-due entries immediately
+    logger.info("🛠️  TEST MODE: Will process past-due entries immediately")
+    # Set test schedule for 5 minutes ahead
+    test_time = (datetime.now(TIMEZONE) + timedelta(minutes=5)).strftime("%H:%M")
+    test_weekday = datetime.now(TIMEZONE).weekday()
+    WEEKLY_SCHEDULE = {test_weekday: [test_time]}
+else:
+    logger.info("🏭 Running in PRODUCTION mode with weekly schedule")
+
+def should_process_immediately(scheduled_time: datetime) -> bool:
+    """Determine if a post should be processed immediately in test mode."""
+    if not TEST_MODE:
+        return False
+    # In test mode, process all posts immediately regardless of scheduled time
+    logger.info(f"⏰ Processing post immediately in test mode (scheduled for {scheduled_time})")
+    return True
+
+def get_next_scheduled_time() -> str:
+    """Calculate the next available scheduled time based on the weekly schedule.
+    
+    Returns:
+        str: ISO formatted datetime string of the next available time slot
+    """
+    now = datetime.now(TIMEZONE)
+    
+    # Load existing schedule to avoid double-booking
+    try:
+        schedule = load_json(SCHEDULE_FILE)
+        if not isinstance(schedule, list):
+            schedule = []
+        scheduled_times = {datetime.fromisoformat(entry['time']).replace(tzinfo=TIMEZONE) for entry in schedule}
+    except Exception as e:
+        logger.warning(f"Failed to load schedule: {e}")
+        scheduled_times = set()
+
+    # Check for the next slot starting from today
+    for offset in range(7):
+        candidate_day = now + timedelta(days=offset)
+        weekday = candidate_day.weekday()
+        
+        if weekday not in WEEKLY_SCHEDULE:
+            continue
+            
+        for time_str in WEEKLY_SCHEDULE[weekday]:
+            # Create a timezone-aware datetime for this slot
+            scheduled_time = TIMEZONE.localize(datetime.strptime(
+                f"{candidate_day.date()} {time_str}", 
+                "%Y-%m-%d %H:%M"
+            ))
+            
+            # Skip if this time is in the past or already scheduled
+            if scheduled_time <= now or scheduled_time in scheduled_times:
+                continue
+                
+            # Found an available slot
+            return scheduled_time.isoformat()
+    
+    # Fallback: if no available slots found, find the next week's first available slot
+    for offset in range(7, 14):
+        candidate_day = now + timedelta(days=offset)
+        weekday = candidate_day.weekday()
+        
+        if weekday not in WEEKLY_SCHEDULE:
+            continue
+            
+        # Return the first available time slot next week
+        time_str = WEEKLY_SCHEDULE[weekday][0]
+        scheduled_time = TIMEZONE.localize(datetime.strptime(
+            f"{candidate_day.date()} {time_str}", 
+            "%Y-%m-%d %H:%M"
+        ))
+        return scheduled_time.isoformat()
+        
+    # Last resort: return now + 1 hour if no schedule is available
+    return (now + timedelta(hours=1)).isoformat()
 
 # Configuration is loaded via environment variables in the subprocesses
 
@@ -151,7 +282,7 @@ def process_file(entry: Dict[str, str]) -> Optional[Dict[str, str]]:
         if verbose:
             cmd.append('--verbose')
             
-        success, output = run_command(cmd, cwd=PROJECT_ROOT, verbose=verbose)
+        success, output = run_command(cmd, cwd=PROJECT_ROOT, verbose=True)  # Enable verbose logging for Instagram posts
         if not success:
             # The error message is now in the output, so we can log it directly
             logger.error(f"Failed to post {filename} to Instagram: {output.strip()}")
@@ -185,13 +316,119 @@ def process_file(entry: Dict[str, str]) -> Optional[Dict[str, str]]:
         logger.error(f"Error processing {filename}: {e}", exc_info=True)
         return None  # Return None to indicate failure
 
-def load_schedule() -> List[Dict]:
-    """Load the schedule from file."""
+# Track the last known schedule state
+last_schedule_count = 0
+
+def process_scheduled_posts():
+    """Process any scheduled posts that are due."""
+    global last_schedule_count
+    
     try:
-        return load_json(SCHEDULE_FILE)
+        # Load current state
+        scheduled = load_json(SCHEDULE_FILE)
+        processed = load_processed()
+        
+        # Verify schedule file exists and is valid
+        if not isinstance(scheduled, list):
+            logger.error("❌ Invalid schedule format - resetting to empty list")
+            scheduled = []
+            save_json(SCHEDULE_FILE, scheduled)
+            
+        if not scheduled:
+            if last_schedule_count > 0:
+                logger.info("📭 Schedule is now empty")
+                last_schedule_count = 0
+            return
+            
+        # Check for new entries
+        current_count = len(scheduled)
+        if current_count > last_schedule_count:
+            new_entries = current_count - last_schedule_count
+            logger.info(f"📬 Detected {new_entries} new scheduled {'entry' if new_entries == 1 else 'entries'}")
+            for entry in scheduled[-new_entries:]:  # Only show the new entries
+                if not all(key in entry for key in ['filename', 'time', 'original_path']):
+                    logger.warning(f"⚠️  Invalid entry format: {entry}")
+                    continue
+                try:
+                    scheduled_time = datetime.fromisoformat(entry['time']).replace(tzinfo=TIMEZONE)
+                    logger.info(f"   • {entry['filename']} scheduled for {scheduled_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                    # Verify file exists
+                    if not os.path.exists(entry['original_path']):
+                        logger.error(f"❌ File not found: {entry['original_path']}")
+                except (ValueError, KeyError) as e:
+                    logger.error(f"❌ Invalid entry data: {e}")
+                    
+        last_schedule_count = current_count
+        logger.debug(f"🔍 Found {len(scheduled)} scheduled posts to check")
+        
+        now = datetime.now(TIMEZONE)
+        processed_filenames = {p['filename'] for p in processed} if processed else set()
+        
+        # Process entries that are due and not already processed
+        for entry in scheduled[:]:  # Create a copy to safely modify the list
+            try:
+                filename = entry.get('filename')
+                original_path = entry.get('original_path')
+                
+                # Skip if required fields are missing
+                if not all([filename, original_path, 'time' in entry]):
+                    logger.error(f"❌ Missing required fields in entry: {entry}")
+                    scheduled.remove(entry)
+                    continue
+                
+                # Verify file exists
+                if not os.path.exists(original_path):
+                    logger.error(f"❌ File not found, removing from schedule: {original_path}")
+                    scheduled.remove(entry)
+                    continue
+                    
+                # Parse scheduled time
+                try:
+                    scheduled_time = datetime.fromisoformat(entry['time']).replace(tzinfo=TIMEZONE)
+                except (ValueError, TypeError) as e:
+                    logger.error(f"❌ Invalid time format in entry, removing: {entry}")
+                    scheduled.remove(entry)
+                    continue
+                
+                # Check if already processed
+                if filename in processed_filenames:
+                    logger.info(f"⏩ Skipping already processed: {filename}")
+                    scheduled.remove(entry)
+                    continue
+                
+                # Process if due or in test mode
+                logger.debug(f"⏱️  Checking schedule time: now={now}, scheduled={scheduled_time}, test_mode={os.getenv('TEST_MODE', 'False')}")
+                if scheduled_time <= now or should_process_immediately(scheduled_time):
+                    logger.info(f"📅 Processing scheduled post: {filename} (scheduled for {scheduled_time})")
+                    logger.debug(f"📂 File path: {original_path}, exists: {os.path.exists(original_path)}")
+                    try:
+                        logger.debug("🔧 Calling process_file...")
+                        result = process_file(entry)
+                        if result:
+                            logger.debug("✅ Process file successful, saving to processed...")
+                            processed.append(result)
+                            save_processed(processed)
+                            logger.info(f"✅ Successfully processed {filename}")
+                            logger.info(f"👁️  Posted: {result.get('url', 'No URL available')}")
+                            scheduled.remove(entry)  # Remove from schedule after successful processing
+                            logger.debug("📝 Schedule updated after successful processing")
+                        else:
+                            logger.error(f"❌ Failed to process {filename} - process_file returned None")
+                    except Exception as e:
+                        logger.error(f"❌ Error processing {filename}: {str(e)}", exc_info=True)
+                else:
+                    logger.debug(f"⏳ Not yet due: {filename} (scheduled for {scheduled_time} > {now})")
+                        
+            except Exception as e:
+                logger.error(f"❌ Unexpected error processing entry {entry.get('filename', 'unknown')}: {e}", exc_info=True)
+        
+        # Save the updated schedule if any entries were removed
+        if len(scheduled) < current_count:
+            save_json(SCHEDULE_FILE, scheduled)
+            logger.debug(f"📋 Updated schedule with {len(scheduled)} remaining entries")
+            
     except Exception as e:
-        logger.error(f"Failed to load schedule: {e}")
-        return []
+        logger.error(f"Error processing scheduled posts: {e}", exc_info=True)
 
 def load_processed() -> List[Dict]:
     """Load the processed files list."""
@@ -209,72 +446,57 @@ def save_processed(processed: List[Dict]) -> None:
         logger.error(f"Failed to save processed files: {e}")
 
 def run_scheduler():
-    """Run the scheduler loop to process scheduled posts."""
+    """Run the scheduling loop."""
+    logger.info("🚀 Running scheduler loop")
+    logger.info("👀 Watching for scheduled posts...")
+    
+    # Ensure required files exist
     if not os.path.exists(SCHEDULE_FILE):
-        logger.error(f"Missing required file: {SCHEDULE_FILE}")
-        return
-        
+        save_json(SCHEDULE_FILE, [])
     if not os.path.exists(PROCESSED_FILE):
         save_json(PROCESSED_FILE, [])
     
-    logger.info("Running scheduler loop")
-    
     try:
         while True:
-            try:
-                # Load schedule and processed files
-                schedule = load_schedule()
-                processed = load_processed()
+            current_time = datetime.now(TIMEZONE)
+            logger.debug(f"Checking schedule at {current_time}")
+            
+            # Process any scheduled posts that are due
+            process_scheduled_posts()
+            
+            # Show idle animation
+            show_idle_animation()
+            
+            # Calculate sleep time until next minute
+            next_minute = (current_time + timedelta(minutes=1)).replace(second=0, microsecond=0)
+            sleep_seconds = (next_minute - current_time).total_seconds()
+            
+            if sleep_seconds > 0:
+                logger.debug(f"Sleeping for {sleep_seconds:.1f} seconds")
+                # Show animation while waiting
+                start_time = time.time()
+                while time.time() - start_time < min(sleep_seconds, 60):
+                    show_idle_animation()
+                    time.sleep(2)  # Add this line
+            else:
+                # In case we're already past the next minute
+                time.sleep(1)
                 
-                # Get set of already processed filenames for faster lookup
-                processed_files = {item['filename'] for item in processed}
-                now = datetime.now().isoformat()
-                
-                logger.debug(f"Checking schedule at {now}")
-                logger.debug(f"Found {len(schedule)} scheduled items, {len(processed_files)} already processed")
-                
-                # Process files that are due
-                for entry in schedule:
-                    filename = entry.get('filename')
-                    scheduled_time = entry.get('time')
-                    
-                    if not filename or not scheduled_time:
-                        logger.warning(f"Invalid schedule entry: {entry}")
-                        continue
-                        
-                    if filename in processed_files:
-                        continue
-                        
-                    if scheduled_time <= now:
-                        logger.info(f"Processing scheduled post: {filename} (scheduled for {scheduled_time})")
-                        result = process_file(entry)
-                        
-                        if result:
-                            processed.append(result)
-                            save_processed(processed)
-                            logger.info(f"Successfully processed {filename}")
-                        else:
-                            logger.error(f"Failed to process {filename}")
-                
-                # Sleep for a while before checking again
-                time.sleep(60)  # Check every minute
-                
-            except KeyboardInterrupt:
-                logger.info("Scheduler stopped by user")
-                break
-                
-            except Exception as e:
-                logger.error(f"Error in scheduler: {e}", exc_info=True)
-                time.sleep(300)  # Wait 5 minutes before retrying on error
-                
+                # Process any scheduled posts that are due
+                process_scheduled_posts()
+            
+    except KeyboardInterrupt:
+        logger.info("Scheduler stopped by user")
     except Exception as e:
-        logger.critical(f"Fatal error in scheduler: {e}", exc_info=True)
+        logger.error(f"Error in scheduler: {e}", exc_info=True)
     finally:
         logger.info("Scheduler stopped")
 
 def main():
     """Main entry point for the scheduler."""
     try:
+        # Ensure only one instance is running
+        ensure_single_instance('scheduler')
         run_scheduler()
     except KeyboardInterrupt:
         logger.info("Scheduler stopped by user")
