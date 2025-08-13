@@ -38,7 +38,7 @@ processed/
 schedule.json
 processed.json
 uv.lock
-db_tkone.json
+db_token.json
 scheduler copy.py
 
 # Environment variables
