@@ -52,7 +52,12 @@ def format_expiration(expires_at):
 
 def store_token(access_token, expires_in, scopes, uid, account_id, verbose=False):
     """Store access token, expiration, and additional info in db_token.json."""
-    from .utils import PROJECT_ROOT
+    try:
+        # Try relative import first (when used as a module)
+        from .utils import PROJECT_ROOT
+    except ImportError:
+        # Fall back to absolute import (when run directly)
+        from utils import PROJECT_ROOT
     expires_at = time.time() + expires_in
     token_data = {
         "access_token": access_token,
@@ -70,7 +75,12 @@ def store_token(access_token, expires_in, scopes, uid, account_id, verbose=False
 
 def load_stored_token():
     """Load stored access token and info if valid."""
-    from .utils import PROJECT_ROOT
+    try:
+        # Try relative import first (when used as a module)
+        from .utils import PROJECT_ROOT
+    except ImportError:
+        # Fall back to absolute import (when run directly)
+        from utils import PROJECT_ROOT
     token_file = PROJECT_ROOT / 'db_token.json'
     try:
         with open(token_file, 'r') as f:
