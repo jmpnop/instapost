@@ -69,13 +69,8 @@ A command-line tool for automating the scheduling and posting of images to Insta
 
 2. **Create and activate a virtual environment** (recommended):
    ```bash
-   # macOS/Linux
    uv venv
    source .venv/bin/activate
-   
-   # Windows
-   uv venv
-  .venv\Scripts\activate 
    ```
 
 3. **Install the package in development mode**:
