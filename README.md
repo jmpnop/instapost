@@ -61,77 +61,53 @@ A command-line tool for automating the scheduling and posting of images to Insta
 - Organizes processed files into dated directories
 - Keeps working directory clean
 
-## 📁 Project Structure & File Documentation
+## 📁 Project Structure
 
-### Core Modules
-
-#### `instapost/cli.py`
-Main command-line interface built with Click framework. Provides all CLI commands including daemon management (`start`, `stop`, `status`, `restart`), queue operations (`queue`, `cancel`, `reschedule`), monitoring (`logs`, `health`, `history`), and direct posting (`post`).
-
-#### `instapost/config.py`
-Configuration management using Pydantic models. Defines `DropboxConfig` and `InstagramConfig` classes with validation. Handles loading credentials from `.env` file and provides token validation methods.
-
-#### `instapost/settings.py`
-Application settings for timezone and weekly schedule. Parses the `WEEKLY_SCHEDULE` environment variable format (`"0:07:00,2:11:00,..."`) and provides timezone utilities using pytz.
-
-#### `instapost/utils.py`
-Utility functions for JSON I/O (`load_json`, `save_json`), logging setup, process safety (`ensure_single_instance`), and idle animations. Provides the `PROJECT_ROOT` path constant used throughout the application.
-
-#### `instapost/validation.py`
-Image validation against Instagram requirements. Checks dimensions (320-1440px), file size (<8MB), aspect ratio (0.8-1.91), and format (JPG/PNG). Returns detailed error messages for invalid images.
-
-#### `instapost/retry.py`
-Retry logic with exponential backoff decorator for API calls. Handles transient failures with configurable retry attempts, delays, and backoff factors. Used for Instagram and Dropbox API operations.
-
-#### `instapost/schedule_utils.py`
-Schedule validation and management utilities. Validates scheduled times, checks for conflicts, and provides functions for adding/removing/updating schedule entries in `schedule.json`.
-
-### Daemon Processes
-
-#### `instapost/daemons/watcher.py`
-File system monitoring daemon using watchdog library. Watches the `images/` directory for new JPG/PNG files, validates them against Instagram requirements, and automatically schedules them to the next available time slot. Includes caption detection from `.txt` files.
-
-#### `instapost/daemons/scheduler.py`
-Post processing daemon that runs the main posting workflow. Checks `schedule.json` every minute for posts due to be published. Executes the complete workflow: validates image → uploads to Dropbox → posts to Instagram → updates `processed.json`. Supports both production mode (follows schedule) and test mode (immediate processing).
-
-#### `instapost/daemons/mover.py`
-File organization daemon that monitors `processed.json` for completed posts. Automatically moves processed images and their captions from `images/` to `processed/YYYY-MM-DD/` directories to keep the workspace clean.
-
-### API Clients
-
-#### `instapost/clients/dropbox.py`
-Dropbox API client for file uploads and shared link generation. Handles OAuth2 authentication with refresh tokens, uploads images to configured folder path, and generates shareable links for Instagram posting. Can be run standalone for testing.
-
-#### `instapost/clients/instagram.py`
-Instagram posting client using Facebook Graph API. Implements the two-step posting process: create media container → publish container. Includes retry logic for handling Instagram API delays and errors. Supports caption text in posts.
-
-#### `instapost/clients/facebook.py`
-Facebook token validation utilities. Provides `FacebookToken` class for validating access tokens, checking expiration, and accessing token metadata (scopes, user_id, app_id). Used by Instagram client to ensure valid authentication.
-
-### CLI Tools
-
-#### `instapost/tools/db_token.py`
-Interactive CLI tool for Dropbox OAuth2 authentication. Guides users through the authorization flow to obtain a refresh token. Saves the token to `db_token.json` for use by the Dropbox client.
-
-#### `instapost/tools/fb_token.py`
-Facebook token inspection and debugging tool. Displays token information including expiration time, scopes, validity status, and associated user/app IDs. Useful for troubleshooting authentication issues.
-
-#### `instapost/tools/image_gen.py`
-Test image generator using matplotlib. Creates simple noise images with timestamp overlays for testing the posting workflow. Saves generated images to `images/` directory with timestamp-based filenames.
-
-### Test Scripts
-
-#### `test/dropbox_api.py`
-Integration test for Dropbox API functionality. Tests authentication, file upload, and shared link generation. Useful for verifying Dropbox credentials and permissions.
-
-#### `test/facebook_api.py`
-Facebook token validation test script. Checks if the configured Facebook access token is valid, displays expiration information, and verifies required permissions.
-
-#### `test/instagram_api.py`
-Instagram posting integration test. Tests the complete posting workflow including media container creation and publication. Validates that Instagram credentials and permissions are correctly configured.
-
-#### `test/scheduler.py`
-Scheduler workflow test script. Tests the scheduling logic, time slot calculation, and post processing workflow without running the full daemon.
+```
+instapost/
+├── instapost/                      # Main Python package
+│   ├── cli.py                      # CLI interface (Click framework)
+│   ├── config.py                   # Pydantic configuration models
+│   ├── settings.py                 # Timezone & weekly schedule parsing
+│   ├── utils.py                    # JSON I/O, logging, process safety
+│   ├── validation.py               # Image validation (Instagram requirements)
+│   ├── retry.py                    # Exponential backoff retry decorator
+│   ├── schedule_utils.py           # Schedule validation & management
+│   │
+│   ├── daemons/                    # Long-running processes
+│   │   ├── watcher.py              # File system monitoring daemon
+│   │   ├── scheduler.py            # Post processing daemon
+│   │   └── mover.py                # File organization daemon
+│   │
+│   ├── clients/                    # API clients
+│   │   ├── dropbox.py              # Dropbox upload & link generation
+│   │   ├── instagram.py            # Instagram posting via Graph API
+│   │   └── facebook.py             # Facebook token validation
+│   │
+│   └── tools/                      # CLI utilities
+│       ├── db_token.py             # Dropbox OAuth2 authentication
+│       ├── fb_token.py             # Facebook token inspection
+│       └── image_gen.py            # Test image generator
+│
+├── test/                           # Test scripts
+│   ├── dropbox_api.py              # Dropbox API integration test
+│   ├── facebook_api.py             # Facebook token validation test
+│   ├── instagram_api.py            # Instagram posting test
+│   └── scheduler.py                # Scheduler workflow test
+│
+├── images/                         # Input: images to post
+├── processed/                      # Output: organized by date (YYYY-MM-DD)
+├── logs/                           # Application logs (daily rotation)
+├── schedule.json                   # Current posting schedule
+├── processed.json                  # Log of processed posts
+├── db_token.json                   # Dropbox OAuth token storage
+├── .env                            # Credentials (never commit!)
+├── .env.example                    # Environment variables template
+├── .gitignore                      # Git ignore rules
+├── pyproject.toml                  # Python project configuration
+├── README.md                       # This file
+└── README.ru.md                    # Russian documentation
+```
 
 ## Installation
 
