@@ -1,6 +1,6 @@
 # InstaPost - Автоматизация публикаций в Instagram
 
-<img width="2912" height="1632" alt="InstaPost Screenshot" src="instapost-screenshot.png" />
+<img width="2912" height="1632" alt="InstaPost Screenshot" src="instapost.png" />
 
 Инструмент командной строки для автоматизации планирования и публикации изображений в Instagram с использованием Facebook Graph API и Dropbox.
 
