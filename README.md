@@ -1,6 +1,6 @@
 # InstaPost - Instagram Posting Automation
 
-<img width="2912" height="1632" alt="InstaPost Screenshot" src="instapost-screenshot.png" />
+<img width="2912" height="1632" alt="InstaPost Screenshot" src="instapost.png" />
 
 A command-line tool for automating the scheduling and posting of images to Instagram using Facebook Graph API and Dropbox.
 
