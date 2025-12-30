@@ -1,7 +1,5 @@
 # InstaPost - Автоматизация публикаций в Instagram
 
-<img width="2912" height="1632" alt="image" src="https://github.com/user-attachments/assets/486436e5-daaa-4bfe-b77b-4535773dd66d" />
-
 Инструмент командной строки для автоматизации планирования и публикации изображений в Instagram с использованием Facebook Graph API и Dropbox.
 
 ## Возможности

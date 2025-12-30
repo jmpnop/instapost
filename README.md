@@ -1,7 +1,5 @@
 # InstaPost - Instagram Posting Automation
 
-<img width="2912" height="1632" alt="image" src="https://github.com/user-attachments/assets/486436e5-daaa-4bfe-b77b-4535773dd66d" />
-
 A command-line tool for automating the scheduling and posting of images to Instagram using Facebook Graph API and Dropbox.
 
 ## Features
