@@ -69,6 +69,272 @@ This document outlines the design for transforming InstaPost from a single-user 
 - Native systemd integration
 - OCI-compliant
 
+### 2.4 Detailed Architecture
+
+#### 2.4.1 Actors
+
+| Actor | Type | Role | Location |
+|-------|------|------|----------|
+| **End User** | Human | Instagram content creator using the bot | Anywhere (via Telegram) |
+| **Admin** | Human | System operator, manages F&F users, monitors health | Via Telegram + server access |
+| **Telegram** | External Service | Message relay, payments, file transfer | Telegram servers (cloud) |
+| **Instagram/Facebook** | External Service | Content publishing platform | Meta servers (cloud) |
+| **Dropbox** | External Service | Image hosting for public URLs | Dropbox servers (cloud) |
+
+#### 2.4.2 Compute Entities
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            VPS / Cloud Server                                │
+│                         (e.g., Hetzner, DigitalOcean)                       │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │                         Podman Pod Network                              │ │
+│  │                                                                          │ │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                  │ │
+│  │  │   instapost  │  │    celery    │  │ celery-beat  │                  │ │
+│  │  │     -bot     │  │   -worker    │  │  (scheduler) │                  │ │
+│  │  │              │  │              │  │              │                  │ │
+│  │  │ Python 3.13  │  │ Python 3.13  │  │ Python 3.13  │                  │ │
+│  │  │ telegram-bot │  │ Celery       │  │ Celery Beat  │                  │ │
+│  │  │ library      │  │              │  │              │                  │ │
+│  │  │              │  │              │  │              │                  │ │
+│  │  │ Port: 8443   │  │ No ports     │  │ No ports     │                  │ │
+│  │  │ (webhook)    │  │ exposed      │  │ exposed      │                  │ │
+│  │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                  │ │
+│  │         │                 │                 │                           │ │
+│  │         └────────────┬────┴─────────────────┘                           │ │
+│  │                      │                                                   │ │
+│  │                      ▼                                                   │ │
+│  │         ┌────────────────────────┐                                      │ │
+│  │         │        Redis           │                                      │ │
+│  │         │    (Message Broker)    │                                      │ │
+│  │         │                        │                                      │ │
+│  │         │  - Celery task queue   │                                      │ │
+│  │         │  - Session cache       │                                      │ │
+│  │         │  - Rate limiting       │                                      │ │
+│  │         │                        │                                      │ │
+│  │         │  Port: 6379 (internal) │                                      │ │
+│  │         └────────────────────────┘                                      │ │
+│  │                      │                                                   │ │
+│  │                      ▼                                                   │ │
+│  │         ┌────────────────────────┐                                      │ │
+│  │         │      PostgreSQL        │                                      │ │
+│  │         │   (Persistent Store)   │                                      │ │
+│  │         │                        │                                      │ │
+│  │         │  - Users               │                                      │ │
+│  │         │  - Subscriptions       │                                      │ │
+│  │         │  - Scheduled posts     │                                      │ │
+│  │         │  - Payment history     │                                      │ │
+│  │         │                        │                                      │ │
+│  │         │  Port: 5432 (internal) │                                      │ │
+│  │         └────────────────────────┘                                      │ │
+│  │                                                                          │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  Volumes (persistent storage on host):                                       │
+│  ├── /var/lib/instapost/postgres/    → PostgreSQL data                      │
+│  ├── /var/lib/instapost/redis/       → Redis RDB snapshots                  │
+│  └── /var/lib/instapost/temp/        → Temporary image files                │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+| Container | Process | CPU | Memory | Scaling |
+|-----------|---------|-----|--------|---------|
+| **instapost-bot** | Main bot (handles Telegram updates) | 1 core | 512MB | Single instance |
+| **celery-worker** | Background task processor | 1-2 cores | 1GB | Horizontal (1-N workers) |
+| **celery-beat** | Periodic task scheduler | 0.1 core | 128MB | Single instance only |
+| **redis** | In-memory cache + message broker | 0.5 core | 256MB | Single instance |
+| **postgres** | Relational database | 1 core | 512MB | Single instance (or managed) |
+
+#### 2.4.3 Storage Entities
+
+| Storage | Type | Location | Data Stored | Persistence |
+|---------|------|----------|-------------|-------------|
+| **PostgreSQL** | Relational DB | Container volume | Users, subscriptions, posts, payments | Persistent (backed up) |
+| **Redis** | In-memory | Container volume | Sessions, rate limits, task queue | Semi-persistent (RDB snapshots) |
+| **Dropbox** | Cloud storage | Dropbox servers | Posted images (temporary) | 7 days after posting |
+| **Local temp** | Filesystem | Host volume | Images during processing | Cleared after upload |
+
+#### 2.4.4 Communication Patterns
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           EXTERNAL NETWORK (HTTPS)                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+        │                           │                           │
+        ▼                           ▼                           ▼
+┌───────────────┐          ┌───────────────┐          ┌───────────────┐
+│   Telegram    │          │   Dropbox     │          │   Instagram   │
+│   Bot API     │          │     API       │          │   Graph API   │
+│               │          │               │          │               │
+│ api.telegram  │          │ api.dropbox   │          │ graph.face    │
+│ .org:443      │          │ .com:443      │          │ book.com:443  │
+└───────┬───────┘          └───────┬───────┘          └───────┬───────┘
+        │                           │                           │
+        │ HTTPS (webhook)           │ HTTPS                     │ HTTPS
+        │ or Long Polling           │                           │
+        ▼                           ▼                           ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              INSTAPOST BOT                                   │
+│                                                                              │
+│   Outbound connections (bot initiates):                                     │
+│   • Telegram API: Send messages, invoices, get file downloads               │
+│   • Dropbox API: Upload images, create shared links                         │
+│   • Instagram API: Create media containers, publish posts                   │
+│                                                                              │
+│   Inbound connections (external initiates):                                 │
+│   • Telegram Webhook: Receives updates on port 8443 (HTTPS required)        │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+        │
+        │ Internal network (container-to-container)
+        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           INTERNAL POD NETWORK                               │
+│                                                                              │
+│  Communication Method: TCP sockets over Podman internal network             │
+│  No ports exposed to internet (except bot webhook)                          │
+│                                                                              │
+│  ┌─────────────┐         ┌─────────────┐         ┌─────────────┐           │
+│  │  Bot        │ ──────► │   Redis     │ ◄────── │   Celery    │           │
+│  │             │  TCP    │  :6379      │   TCP   │   Worker    │           │
+│  │  Enqueues   │         │             │         │             │           │
+│  │  tasks      │         │  Task Queue │         │  Dequeues   │           │
+│  │             │         │  (Celery)   │         │  & executes │           │
+│  └──────┬──────┘         └─────────────┘         └──────┬──────┘           │
+│         │                                                │                  │
+│         │ TCP :5432                                      │ TCP :5432        │
+│         │                                                │                  │
+│         └──────────────────┬─────────────────────────────┘                  │
+│                            ▼                                                 │
+│                   ┌─────────────────┐                                       │
+│                   │   PostgreSQL    │                                       │
+│                   │     :5432       │                                       │
+│                   │                 │                                       │
+│                   │  Shared state   │                                       │
+│                   │  for all        │                                       │
+│                   │  containers     │                                       │
+│                   └─────────────────┘                                       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 2.4.5 Communication Protocols
+
+| Connection | Protocol | Port | Direction | Auth Method |
+|------------|----------|------|-----------|-------------|
+| User → Telegram | HTTPS | 443 | Outbound (user) | Telegram account |
+| Telegram → Bot (webhook) | HTTPS | 8443 | Inbound | Webhook secret |
+| Bot → Telegram API | HTTPS | 443 | Outbound | Bot token |
+| Bot → Dropbox API | HTTPS | 443 | Outbound | OAuth2 refresh token |
+| Bot → Instagram API | HTTPS | 443 | Outbound | Page access token |
+| Bot → Redis | TCP | 6379 | Internal | None (internal network) |
+| Bot → PostgreSQL | TCP | 5432 | Internal | Username/password |
+| Celery → Redis | TCP | 6379 | Internal | None (internal network) |
+| Celery → PostgreSQL | TCP | 5432 | Internal | Username/password |
+
+#### 2.4.6 Data Flow: Posting an Image
+
+```
+ User                 Telegram           Bot              Redis          Celery         Dropbox        Instagram
+   │                     │                │                 │               │               │               │
+   │  1. Send image      │                │                 │               │               │               │
+   │ ──────────────────► │                │                 │               │               │               │
+   │                     │  2. Webhook    │                 │               │               │               │
+   │                     │ ─────────────► │                 │               │               │               │
+   │                     │                │  3. Download    │               │               │               │
+   │                     │ ◄───────────── │     image       │               │               │               │
+   │                     │                │                 │               │               │               │
+   │                     │                │  4. Save to     │               │               │               │
+   │                     │                │     temp file   │               │               │               │
+   │                     │                │                 │               │               │               │
+   │                     │                │  5. Validate    │               │               │               │
+   │                     │                │     image       │               │               │               │
+   │                     │                │                 │               │               │               │
+   │                     │                │  6. Store post  │               │               │               │
+   │                     │                │     in DB       │               │               │               │
+   │                     │                │ ═══════════════════════════════════► PostgreSQL  │               │
+   │                     │                │                 │               │               │               │
+   │                     │                │  7. Enqueue     │               │               │               │
+   │                     │                │     task        │               │               │               │
+   │                     │                │ ───────────────►│               │               │               │
+   │                     │                │                 │  8. Dequeue   │               │               │
+   │                     │                │                 │ ─────────────►│               │               │
+   │                     │                │                 │               │  9. Upload    │               │
+   │                     │                │                 │               │ ─────────────►│               │
+   │                     │                │                 │               │               │               │
+   │                     │                │                 │               │  10. Get      │               │
+   │                     │                │                 │               │      share    │               │
+   │                     │                │                 │               │ ◄─────────────│               │
+   │                     │                │                 │               │      link     │               │
+   │                     │                │                 │               │               │               │
+   │                     │                │                 │               │  11. Create   │               │
+   │                     │                │                 │               │      media    │               │
+   │                     │                │                 │               │ ─────────────────────────────►│
+   │                     │                │                 │               │               │               │
+   │                     │                │                 │               │  12. Publish  │               │
+   │                     │                │                 │               │ ─────────────────────────────►│
+   │                     │                │                 │               │               │               │
+   │                     │                │                 │               │  13. Update   │               │
+   │                     │                │                 │               │      DB       │               │
+   │                     │                │ ◄═══════════════════════════════│ PostgreSQL   │               │
+   │                     │                │                 │               │               │               │
+   │                     │  14. Notify    │                 │               │               │               │
+   │                     │ ◄───────────── │     user        │               │               │               │
+   │  15. Success msg    │                │                 │               │               │               │
+   │ ◄────────────────── │                │                 │               │               │               │
+   │                     │                │                 │               │               │               │
+```
+
+#### 2.4.7 Inter-Process Communication
+
+| From | To | Mechanism | Data Format | Purpose |
+|------|----|-----------|-------------|---------|
+| Bot → Celery | Redis (Celery broker) | Task message | JSON (pickled) | Schedule background jobs |
+| Celery → Bot | PostgreSQL (shared) | Database row | SQL records | Task results, status updates |
+| Celery Beat → Celery | Redis (Celery broker) | Periodic task | JSON | Trigger scheduled checks |
+| Bot → Bot | Redis (cache) | Key-value | JSON/string | Session state, rate limits |
+
+#### 2.4.8 Failure Modes & Recovery
+
+| Component Failure | Impact | Recovery | Data Loss |
+|-------------------|--------|----------|-----------|
+| **Bot container dies** | No new messages processed | Auto-restart via Podman | None (stateless) |
+| **Celery worker dies** | Tasks queue up in Redis | Auto-restart, tasks retry | None (tasks persist in Redis) |
+| **Redis dies** | Sessions lost, tasks queued in memory | Restart, RDB restore | Recent cache only |
+| **PostgreSQL dies** | Complete service outage | Restore from backup | Up to last backup |
+| **Network to Telegram** | Can't receive/send messages | Retry with backoff | Messages queued by Telegram |
+| **Network to Dropbox** | Can't upload images | Task retry (5 attempts) | None (retry) |
+| **Network to Instagram** | Can't publish posts | Task retry (5 attempts) | None (retry) |
+
+#### 2.4.9 Deployment Topology Options
+
+**Option A: Single VPS (Development/Small Scale)**
+```
+┌─────────────────────────────────┐
+│         Single VPS              │
+│  (4GB RAM, 2 CPU, 80GB SSD)    │
+│                                 │
+│  All containers + volumes       │
+│  on single machine              │
+│                                 │
+│  Cost: ~$20-40/month            │
+└─────────────────────────────────┘
+```
+
+**Option B: Managed Services (Production)**
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   VPS           │    │ Managed         │    │ Managed         │
+│   (Bot +        │◄──►│ PostgreSQL      │    │ Redis           │
+│   Celery)       │    │ (e.g., Supabase)│◄──►│ (e.g., Upstash) │
+│                 │    │                 │    │                 │
+│ Cost: $10-20/mo │    │ Cost: $0-25/mo  │    │ Cost: $0-10/mo  │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
 ---
 
 ## 3. User Management
