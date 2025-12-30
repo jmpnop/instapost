@@ -22,16 +22,16 @@ This document outlines the design for transforming InstaPost from a single-user 
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │                 │     │                 │     │                 │
 │  Telegram API   │◄───►│  InstaPost Bot  │◄───►│   PostgreSQL    │
-│                 │     │    (Python)     │     │    Database     │
+│  (+ Payments)   │     │    (Python)     │     │    Database     │
 └─────────────────┘     └────────┬────────┘     └─────────────────┘
                                  │
-                    ┌────────────┼────────────┐
-                    │            │            │
-                    ▼            ▼            ▼
-            ┌───────────┐ ┌───────────┐ ┌───────────┐
-            │  Dropbox  │ │ Instagram │ │  Stripe   │
-            │    API    │ │ Graph API │ │    API    │
-            └───────────┘ └───────────┘ └───────────┘
+                        ┌────────┴────────┐
+                        │                 │
+                        ▼                 ▼
+                    ┌───────────┐     ┌───────────┐
+                    │  Dropbox  │     │ Instagram │
+                    │    API    │     │ Graph API │
+                    └───────────┘     └───────────┘
 ```
 
 ### 2.2 Component Overview
@@ -42,7 +42,7 @@ This document outlines the design for transforming InstaPost from a single-user 
 | Database | PostgreSQL 15+ | User data, subscriptions, schedules |
 | Cache | Redis | Session management, rate limiting |
 | Task Queue | Celery + Redis | Background job processing |
-| Payment Processing | Stripe | Subscription billing |
+| Payment Processing | Telegram Payments (Stars + Crypto) | Subscription billing (native) |
 | File Storage | Dropbox API | Image hosting for Instagram |
 | Instagram API | Facebook Graph API | Post publishing |
 
@@ -189,12 +189,13 @@ class Subscription:
     id: int
     user_id: int                     # FK to User
     plan: str                        # free/basic/pro/business/friends_family
-    status: str                      # active/cancelled/past_due/trialing
-    stripe_subscription_id: str | None  # None for free and F&F
-    stripe_customer_id: str | None
+    status: str                      # active/cancelled/expired
+    payment_method: str | None       # stars/crypto/None (for free/F&F)
+    telegram_payment_id: str | None  # Telegram payment charge ID
+    stars_balance: int               # Accumulated Stars (if using Stars)
     current_period_start: datetime
-    current_period_end: datetime       # For F&F: set to far future (2099-12-31)
-    cancel_at_period_end: bool
+    current_period_end: datetime     # For F&F: set to far future (2099-12-31)
+    auto_renew: bool                 # User preference for auto-renewal
     created_at: datetime
     updated_at: datetime
 
@@ -208,7 +209,11 @@ class UsageTracking:
     storage_used_mb: float           # Storage used
 ```
 
-### 4.3 Payment Flow (Stripe Integration)
+### 4.3 Payment Flow (Telegram Payments)
+
+Telegram supports two native payment methods:
+- **Telegram Stars** - In-app currency, easy micropayments
+- **Cryptocurrency** - TON and other supported cryptos via @wallet
 
 ```
 User selects /upgrade
@@ -216,7 +221,8 @@ User selects /upgrade
         ▼
 ┌───────────────────┐
 │ Show plan options │
-│ with prices       │
+│ with Stars/Crypto │
+│ prices            │
 └─────────┬─────────┘
           │
           ▼
@@ -226,25 +232,41 @@ User selects /upgrade
           │
           ▼
 ┌───────────────────┐
-│ Generate Stripe   │
-│ Checkout Session  │
+│ Choose payment    │
+│ method            │
+│ [⭐ Stars] [💎 Crypto]│
 └─────────┬─────────┘
           │
-          ▼
-┌───────────────────┐
-│ Send payment link │
-│ to user           │
-└─────────┬─────────┘
-          │
-          ▼
+    ┌─────┴─────┐
+    │           │
+    ▼           ▼
+[Stars]      [Crypto]
+    │           │
+    ▼           ▼
+┌─────────┐ ┌─────────┐
+│ Send    │ │ Generate│
+│ Invoice │ │ TON/USDT│
+│ (Stars) │ │ invoice │
+└────┬────┘ └────┬────┘
+     │           │
+     └─────┬─────┘
+           │
+           ▼
 ┌───────────────────┐
 │ User completes    │
-│ payment on Stripe │
+│ payment in        │
+│ Telegram          │
 └─────────┬─────────┘
           │
           ▼
 ┌───────────────────┐
-│ Webhook callback  │
+│ PreCheckoutQuery  │
+│ validation        │
+└─────────┬─────────┘
+          │
+          ▼
+┌───────────────────┐
+│ SuccessfulPayment │
 │ updates DB        │
 └─────────┬─────────┘
           │
@@ -255,15 +277,62 @@ User selects /upgrade
 └───────────────────┘
 ```
 
-### 4.4 Stripe Webhook Events to Handle
+### 4.4 Telegram Payment Handlers
 
-| Event | Action |
-|-------|--------|
-| `checkout.session.completed` | Activate subscription |
-| `invoice.paid` | Renew subscription period |
-| `invoice.payment_failed` | Mark as past_due, notify user |
-| `customer.subscription.updated` | Update plan details |
-| `customer.subscription.deleted` | Downgrade to free |
+```python
+# Handle pre-checkout query (validate before payment)
+async def pre_checkout_handler(update: Update, context: ContextTypes):
+    query = update.pre_checkout_query
+
+    # Validate the payment
+    user = get_user(query.from_user.id)
+    plan = query.invoice_payload  # e.g., "basic_monthly"
+
+    if not validate_upgrade(user, plan):
+        await query.answer(ok=False, error_message="Upgrade not available")
+        return
+
+    # Approve the checkout
+    await query.answer(ok=True)
+
+
+# Handle successful payment
+async def successful_payment_handler(update: Update, context: ContextTypes):
+    payment = update.message.successful_payment
+    user_id = update.effective_user.id
+
+    # Extract payment details
+    plan = payment.invoice_payload
+    amount = payment.total_amount
+    currency = payment.currency  # "XTR" for Stars, or crypto
+    charge_id = payment.telegram_payment_charge_id
+
+    # Activate subscription
+    activate_subscription(
+        user_id=user_id,
+        plan=plan,
+        payment_method="stars" if currency == "XTR" else "crypto",
+        payment_id=charge_id
+    )
+
+    await update.message.reply_text(
+        f"✅ Payment successful! Your {plan} plan is now active."
+    )
+```
+
+### 4.5 Pricing in Stars and Crypto
+
+| Plan | Stars/month | TON/month | USDT/month |
+|------|-------------|-----------|------------|
+| Basic | 450 ⭐ | 1.5 TON | $9 |
+| Pro | 1,450 ⭐ | 5 TON | $29 |
+| Business | 4,950 ⭐ | 17 TON | $99 |
+
+**Notes:**
+- Star prices based on ~$0.02 per Star
+- TON prices fluctuate with market (recalculated daily)
+- USDT provides stable crypto option
+- Annual plans: 2 months free (10 months price)
 
 ---
 
@@ -685,12 +754,13 @@ CREATE TABLE subscriptions (
     id SERIAL PRIMARY KEY,
     user_id BIGINT UNIQUE REFERENCES users(id) ON DELETE CASCADE,
     plan VARCHAR(20) DEFAULT 'free',  -- free/basic/pro/business/friends_family
-    status VARCHAR(20) DEFAULT 'active',
-    stripe_subscription_id VARCHAR(255),  -- NULL for free and friends_family
-    stripe_customer_id VARCHAR(255),
+    status VARCHAR(20) DEFAULT 'active',  -- active/cancelled/expired
+    payment_method VARCHAR(20),  -- stars/crypto/NULL (for free/F&F)
+    telegram_payment_id VARCHAR(255),  -- Telegram payment charge ID
+    stars_balance INT DEFAULT 0,  -- Accumulated Stars
     current_period_start TIMESTAMP,
     current_period_end TIMESTAMP,  -- For F&F: 2099-12-31
-    cancel_at_period_end BOOLEAN DEFAULT FALSE,
+    auto_renew BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -781,7 +851,7 @@ cache:instagram:{account_id}:info -> {account_info}
 | User Data | PostgreSQL row-level security |
 | API Keys | Environment variables, never in code |
 | Passwords | Not applicable (Telegram auth) |
-| Payment Data | Stripe handles all PCI compliance |
+| Payment Data | Telegram handles all payment processing |
 
 ### 8.2 Rate Limiting
 
@@ -887,7 +957,7 @@ RETRY_CONFIG = {
 1. **Post Scheduling Failure**: Queue for retry, notify user after 3 failures
 2. **Database Connection Loss**: Reconnect with exponential backoff
 3. **Redis Unavailable**: Fall back to in-memory cache (degraded mode)
-4. **Stripe Webhook Failure**: Reconciliation job runs hourly
+4. **Payment Verification**: Daily job validates subscription status with Telegram
 
 ---
 
@@ -1014,7 +1084,7 @@ locales/
 - [ ] Free tier only
 
 ### Phase 2: Subscriptions (2 weeks)
-- [ ] Stripe integration
+- [ ] Telegram Payments integration (Stars + Crypto)
 - [ ] Subscription tiers
 - [ ] Usage tracking
 - [ ] Payment management
@@ -1066,7 +1136,7 @@ With $75/month infrastructure cost:
 
 2. **Webhook vs Polling**: Telegram supports both - webhook for production, polling for development?
 
-3. **Billing Currency**: USD only or support EUR, GBP?
+3. **Stars vs Crypto**: Should we prioritize Stars (simpler) or offer both from day one?
 
 4. **Refund Policy**: What's the refund window for subscriptions?
 
@@ -1091,12 +1161,15 @@ TELEGRAM_WEBHOOK_URL=https://...
 DATABASE_URL=postgresql://user:pass@host:5432/instapost
 REDIS_URL=redis://localhost:6379/0
 
-# Stripe
-STRIPE_SECRET_KEY=sk_xxx
-STRIPE_WEBHOOK_SECRET=whsec_xxx
-STRIPE_PRICE_BASIC=price_xxx
-STRIPE_PRICE_PRO=price_xxx
-STRIPE_PRICE_BUSINESS=price_xxx
+# Telegram Payments
+TELEGRAM_PAYMENT_TOKEN=xxx  # Provider token for payments (if using external provider)
+# Note: Telegram Stars payments are native and don't require additional tokens
+# Crypto payments via @wallet bot are also native to Telegram
+
+# Pricing (in Stars)
+PRICE_BASIC_STARS=450
+PRICE_PRO_STARS=1450
+PRICE_BUSINESS_STARS=4950
 
 # Dropbox
 DROPBOX_APP_KEY=xxx
@@ -1134,6 +1207,9 @@ GET    /api/v1/subscription       # Get subscription info
 - `deleteMessage` - Remove messages
 - `getFile` - Download uploaded images
 - `setMyCommands` - Set command menu
+- `sendInvoice` - Send payment invoice (Stars/Crypto)
+- `answerPreCheckoutQuery` - Validate payment before processing
+- `createInvoiceLink` - Generate shareable payment link
 
 ---
 
