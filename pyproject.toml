@@ -1,0 +1,26 @@
+[project]
+name = "instapost"
+version = "0.1.0"
+description = "Tool for posting images to Instagram using Facebook Graph API and Dropbox"
+requires-python = ">=3.13"
+dependencies = [
+    "dropbox",
+    "requests",
+    "python-dotenv",
+    "click",
+    "pydantic",
+    "matplotlib>=3.10.5",
+    "watchdog>=6.0.0",
+    "pytz>=2025.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "isort",
+    "mypy",
+]
+
+[project.scripts]
+instapost = "instapost.cli:main"
