@@ -39,12 +39,18 @@ This document outlines the design for transforming InstaPost from a single-user 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | Bot Application | Python 3.13+ / python-telegram-bot | Core bot logic, command handling |
-| Database | PostgreSQL 15+ | User data, subscriptions, schedules |
-| Cache | Redis | Session management, rate limiting |
-| Task Queue | Celery + Redis | Background job processing |
+| Database | PostgreSQL 16+ | All data + cache + task queue + pub/sub |
+| Task Queue | PostgreSQL (LISTEN/NOTIFY + task table) | Background job processing |
 | Payment Processing | Telegram Payments (Stars + Crypto) | Subscription billing (native) |
 | File Storage | Dropbox API | Image hosting for Instagram |
 | Instagram API | Facebook Graph API | Post publishing |
+
+**PostgreSQL replaces Redis** - single database for everything:
+- **Cache**: UNLOGGED tables with TTL (faster, no WAL overhead)
+- **Sessions**: JSONB column with expiration timestamps
+- **Task Queue**: Task table + LISTEN/NOTIFY for workers
+- **Rate Limiting**: Sliding window counters in PostgreSQL
+- **Pub/Sub**: Native LISTEN/NOTIFY for real-time events
 
 ### 2.3 Deployment Architecture
 
@@ -52,13 +58,13 @@ This document outlines the design for transforming InstaPost from a single-user 
 ┌─────────────────────────────────────────────────────────────┐
 │                       Podman Compose                         │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │  Bot        │  │  Celery     │  │  Celery Beat        │  │
-│  │  Container  │  │  Worker(s)  │  │  (Scheduler)        │  │
+│  │  Bot        │  │  Worker     │  │  Scheduler          │  │
+│  │  Container  │  │  Container  │  │  (cron/pg_cron)     │  │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘  │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │  PostgreSQL │  │    Redis    │  │  Nginx (optional)   │  │
-│  │             │  │             │  │  for webhooks       │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+│  ┌─────────────────────────────┐  ┌─────────────────────┐  │
+│  │         PostgreSQL          │  │  Nginx (optional)   │  │
+│  │  (data + cache + queue)     │  │  for webhooks       │  │
+│  └─────────────────────────────┘  └─────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -92,49 +98,48 @@ This document outlines the design for transforming InstaPost from a single-user 
 │  │                         Podman Pod Network                              │ │
 │  │                                                                          │ │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                  │ │
-│  │  │   instapost  │  │    celery    │  │ celery-beat  │                  │ │
-│  │  │     -bot     │  │   -worker    │  │  (scheduler) │                  │ │
+│  │  │   instapost  │  │   instapost  │  │   pg_cron    │                  │ │
+│  │  │     -bot     │  │   -worker    │  │  (in postgres)│                  │ │
 │  │  │              │  │              │  │              │                  │ │
-│  │  │ Python 3.13  │  │ Python 3.13  │  │ Python 3.13  │                  │ │
-│  │  │ telegram-bot │  │ Celery       │  │ Celery Beat  │                  │ │
-│  │  │ library      │  │              │  │              │                  │ │
+│  │  │ Python 3.13  │  │ Python 3.13  │  │ PostgreSQL   │                  │ │
+│  │  │ telegram-bot │  │ asyncio      │  │ extension    │                  │ │
+│  │  │ library      │  │ task runner  │  │              │                  │ │
 │  │  │              │  │              │  │              │                  │ │
-│  │  │ Port: 8443   │  │ No ports     │  │ No ports     │                  │ │
-│  │  │ (webhook)    │  │ exposed      │  │ exposed      │                  │ │
-│  │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                  │ │
-│  │         │                 │                 │                           │ │
-│  │         └────────────┬────┴─────────────────┘                           │ │
-│  │                      │                                                   │ │
-│  │                      ▼                                                   │ │
-│  │         ┌────────────────────────┐                                      │ │
-│  │         │        Redis           │                                      │ │
-│  │         │    (Message Broker)    │                                      │ │
-│  │         │                        │                                      │ │
-│  │         │  - Celery task queue   │                                      │ │
-│  │         │  - Session cache       │                                      │ │
-│  │         │  - Rate limiting       │                                      │ │
-│  │         │                        │                                      │ │
-│  │         │  Port: 6379 (internal) │                                      │ │
-│  │         └────────────────────────┘                                      │ │
-│  │                      │                                                   │ │
-│  │                      ▼                                                   │ │
-│  │         ┌────────────────────────┐                                      │ │
-│  │         │      PostgreSQL        │                                      │ │
-│  │         │   (Persistent Store)   │                                      │ │
-│  │         │                        │                                      │ │
-│  │         │  - Users               │                                      │ │
-│  │         │  - Subscriptions       │                                      │ │
-│  │         │  - Scheduled posts     │                                      │ │
-│  │         │  - Payment history     │                                      │ │
-│  │         │                        │                                      │ │
-│  │         │  Port: 5432 (internal) │                                      │ │
-│  │         └────────────────────────┘                                      │ │
+│  │  │ Port: 8443   │  │ No ports     │  │ Runs inside  │                  │ │
+│  │  │ (webhook)    │  │ exposed      │  │ PostgreSQL   │                  │ │
+│  │  └──────┬───────┘  └──────┬───────┘  └──────────────┘                  │ │
+│  │         │                 │                                             │ │
+│  │         │                 │                                             │ │
+│  │         │    TCP :5432    │    TCP :5432                                │ │
+│  │         │   LISTEN/NOTIFY │   (polling + LISTEN)                        │ │
+│  │         │                 │                                             │ │
+│  │         └────────┬────────┘                                             │ │
+│  │                  │                                                       │ │
+│  │                  ▼                                                       │ │
+│  │         ┌────────────────────────────────────────┐                      │ │
+│  │         │            PostgreSQL 16+              │                      │ │
+│  │         │        (Single Source of Truth)        │                      │ │
+│  │         │                                        │                      │ │
+│  │         │  TABLES:                               │                      │ │
+│  │         │  ├── users, subscriptions, posts       │                      │ │
+│  │         │  ├── task_queue (background jobs)      │                      │ │
+│  │         │  ├── cache (UNLOGGED, with TTL)        │                      │ │
+│  │         │  ├── sessions (JSONB + expiry)         │                      │ │
+│  │         │  └── rate_limits (sliding window)      │                      │ │
+│  │         │                                        │                      │ │
+│  │         │  FEATURES USED:                        │                      │ │
+│  │         │  ├── LISTEN/NOTIFY (pub/sub)           │                      │ │
+│  │         │  ├── SKIP LOCKED (task claiming)       │                      │ │
+│  │         │  ├── pg_cron (periodic tasks)          │                      │ │
+│  │         │  └── JSONB (flexible data)             │                      │ │
+│  │         │                                        │                      │ │
+│  │         │  Port: 5432 (internal only)            │                      │ │
+│  │         └────────────────────────────────────────┘                      │ │
 │  │                                                                          │ │
 │  └────────────────────────────────────────────────────────────────────────┘ │
 │                                                                              │
 │  Volumes (persistent storage on host):                                       │
 │  ├── /var/lib/instapost/postgres/    → PostgreSQL data                      │
-│  ├── /var/lib/instapost/redis/       → Redis RDB snapshots                  │
 │  └── /var/lib/instapost/temp/        → Temporary image files                │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -143,19 +148,27 @@ This document outlines the design for transforming InstaPost from a single-user 
 | Container | Process | CPU | Memory | Scaling |
 |-----------|---------|-----|--------|---------|
 | **instapost-bot** | Main bot (handles Telegram updates) | 1 core | 512MB | Single instance |
-| **celery-worker** | Background task processor | 1-2 cores | 1GB | Horizontal (1-N workers) |
-| **celery-beat** | Periodic task scheduler | 0.1 core | 128MB | Single instance only |
-| **redis** | In-memory cache + message broker | 0.5 core | 256MB | Single instance |
-| **postgres** | Relational database | 1 core | 512MB | Single instance (or managed) |
+| **instapost-worker** | Background task processor (LISTEN/NOTIFY) | 0.5-1 core | 512MB | Horizontal (1-N workers) |
+| **postgres** | Database + cache + queue + scheduler | 1-2 cores | 1GB | Single instance (or managed) |
+
+**Simplified stack**: Only 2-3 containers instead of 5. PostgreSQL handles everything.
 
 #### 2.4.3 Storage Entities
 
 | Storage | Type | Location | Data Stored | Persistence |
 |---------|------|----------|-------------|-------------|
-| **PostgreSQL** | Relational DB | Container volume | Users, subscriptions, posts, payments | Persistent (backed up) |
-| **Redis** | In-memory | Container volume | Sessions, rate limits, task queue | Semi-persistent (RDB snapshots) |
+| **PostgreSQL** | Relational DB | Container volume | Everything (see below) | Persistent (backed up) |
 | **Dropbox** | Cloud storage | Dropbox servers | Posted images (temporary) | 7 days after posting |
 | **Local temp** | Filesystem | Host volume | Images during processing | Cleared after upload |
+
+**PostgreSQL stores all data:**
+| Table Type | Purpose | PostgreSQL Feature |
+|------------|---------|-------------------|
+| Core tables | Users, subscriptions, posts, payments | Standard tables |
+| Task queue | Background jobs waiting to run | `SELECT FOR UPDATE SKIP LOCKED` |
+| Cache | Temporary data with TTL | UNLOGGED tables (no WAL = faster) |
+| Sessions | User conversation state | JSONB + expiration timestamp |
+| Rate limits | API call counters | Sliding window with timestamps |
 
 #### 2.4.4 Communication Patterns
 
@@ -197,26 +210,35 @@ This document outlines the design for transforming InstaPost from a single-user 
 │  Communication Method: TCP sockets over Podman internal network             │
 │  No ports exposed to internet (except bot webhook)                          │
 │                                                                              │
-│  ┌─────────────┐         ┌─────────────┐         ┌─────────────┐           │
-│  │  Bot        │ ──────► │   Redis     │ ◄────── │   Celery    │           │
-│  │             │  TCP    │  :6379      │   TCP   │   Worker    │           │
-│  │  Enqueues   │         │             │         │             │           │
-│  │  tasks      │         │  Task Queue │         │  Dequeues   │           │
-│  │             │         │  (Celery)   │         │  & executes │           │
-│  └──────┬──────┘         └─────────────┘         └──────┬──────┘           │
-│         │                                                │                  │
-│         │ TCP :5432                                      │ TCP :5432        │
-│         │                                                │                  │
-│         └──────────────────┬─────────────────────────────┘                  │
+│  ┌─────────────┐                              ┌─────────────┐               │
+│  │  Bot        │                              │   Worker    │               │
+│  │             │                              │             │               │
+│  │  INSERT     │                              │  LISTEN     │               │
+│  │  task into  │                              │  for new    │               │
+│  │  task_queue │                              │  tasks      │               │
+│  └──────┬──────┘                              └──────┬──────┘               │
+│         │                                            │                      │
+│         │ TCP :5432                                  │ TCP :5432            │
+│         │ (INSERT + NOTIFY)                          │ (LISTEN + SELECT)    │
+│         │                                            │                      │
+│         └──────────────────┬─────────────────────────┘                      │
 │                            ▼                                                 │
-│                   ┌─────────────────┐                                       │
-│                   │   PostgreSQL    │                                       │
-│                   │     :5432       │                                       │
-│                   │                 │                                       │
-│                   │  Shared state   │                                       │
-│                   │  for all        │                                       │
-│                   │  containers     │                                       │
-│                   └─────────────────┘                                       │
+│         ┌───────────────────────────────────────────┐                       │
+│         │             PostgreSQL :5432              │                       │
+│         │                                           │                       │
+│         │  ┌─────────────────────────────────────┐  │                       │
+│         │  │  task_queue table                   │  │                       │
+│         │  │  + LISTEN/NOTIFY channel            │  │                       │
+│         │  │                                     │  │                       │
+│         │  │  Bot: INSERT + pg_notify('tasks')   │  │                       │
+│         │  │  Worker: LISTEN tasks + poll        │  │                       │
+│         │  │  Worker: SELECT FOR UPDATE SKIP     │  │                       │
+│         │  │          LOCKED (claim task)        │  │                       │
+│         │  └─────────────────────────────────────┘  │                       │
+│         │                                           │                       │
+│         │  Also stores: users, posts, sessions,    │                       │
+│         │  cache, rate_limits, payments            │                       │
+│         └───────────────────────────────────────────┘                       │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -230,15 +252,20 @@ This document outlines the design for transforming InstaPost from a single-user 
 | Bot → Telegram API | HTTPS | 443 | Outbound | Bot token |
 | Bot → Dropbox API | HTTPS | 443 | Outbound | OAuth2 refresh token |
 | Bot → Instagram API | HTTPS | 443 | Outbound | Page access token |
-| Bot → Redis | TCP | 6379 | Internal | None (internal network) |
 | Bot → PostgreSQL | TCP | 5432 | Internal | Username/password |
-| Celery → Redis | TCP | 6379 | Internal | None (internal network) |
-| Celery → PostgreSQL | TCP | 5432 | Internal | Username/password |
+| Worker → PostgreSQL | TCP | 5432 | Internal | Username/password |
+
+**PostgreSQL-based task queue protocol:**
+1. Bot inserts task into `task_queue` table
+2. Bot calls `pg_notify('tasks', task_id)` to wake workers
+3. Worker listens on channel: `LISTEN tasks`
+4. Worker claims task: `SELECT * FROM task_queue WHERE status='pending' FOR UPDATE SKIP LOCKED LIMIT 1`
+5. Worker processes task, updates status to 'completed' or 'failed'
 
 #### 2.4.6 Data Flow: Posting an Image
 
 ```
- User                 Telegram           Bot              Redis          Celery         Dropbox        Instagram
+ User                 Telegram           Bot            PostgreSQL        Worker         Dropbox        Instagram
    │                     │                │                 │               │               │               │
    │  1. Send image      │                │                 │               │               │               │
    │ ──────────────────► │                │                 │               │               │               │
@@ -253,37 +280,41 @@ This document outlines the design for transforming InstaPost from a single-user 
    │                     │                │  5. Validate    │               │               │               │
    │                     │                │     image       │               │               │               │
    │                     │                │                 │               │               │               │
-   │                     │                │  6. Store post  │               │               │               │
-   │                     │                │     in DB       │               │               │               │
-   │                     │                │ ═══════════════════════════════════► PostgreSQL  │               │
-   │                     │                │                 │               │               │               │
-   │                     │                │  7. Enqueue     │               │               │               │
-   │                     │                │     task        │               │               │               │
+   │                     │                │  6. INSERT post │               │               │               │
+   │                     │                │     + task      │               │               │               │
    │                     │                │ ───────────────►│               │               │               │
-   │                     │                │                 │  8. Dequeue   │               │               │
+   │                     │                │                 │               │               │               │
+   │                     │                │  7. NOTIFY      │               │               │               │
+   │                     │                │ ───────────────►│               │               │               │
+   │                     │                │                 │  8. LISTEN    │               │               │
+   │                     │                │                 │     wakes up  │               │               │
    │                     │                │                 │ ─────────────►│               │               │
-   │                     │                │                 │               │  9. Upload    │               │
+   │                     │                │                 │               │               │               │
+   │                     │                │                 │  9. SELECT    │               │               │
+   │                     │                │                 │     FOR UPDATE│               │               │
+   │                     │                │                 │     SKIP LOCKED               │               │
+   │                     │                │                 │ ◄─────────────│               │               │
+   │                     │                │                 │               │               │               │
+   │                     │                │                 │               │  10. Upload   │               │
    │                     │                │                 │               │ ─────────────►│               │
    │                     │                │                 │               │               │               │
-   │                     │                │                 │               │  10. Get      │               │
-   │                     │                │                 │               │      share    │               │
+   │                     │                │                 │               │  11. Get link │               │
    │                     │                │                 │               │ ◄─────────────│               │
-   │                     │                │                 │               │      link     │               │
    │                     │                │                 │               │               │               │
-   │                     │                │                 │               │  11. Create   │               │
+   │                     │                │                 │               │  12. Create   │               │
    │                     │                │                 │               │      media    │               │
    │                     │                │                 │               │ ─────────────────────────────►│
    │                     │                │                 │               │               │               │
-   │                     │                │                 │               │  12. Publish  │               │
+   │                     │                │                 │               │  13. Publish  │               │
    │                     │                │                 │               │ ─────────────────────────────►│
    │                     │                │                 │               │               │               │
-   │                     │                │                 │               │  13. Update   │               │
-   │                     │                │                 │               │      DB       │               │
-   │                     │                │ ◄═══════════════════════════════│ PostgreSQL   │               │
+   │                     │                │                 │  14. UPDATE   │               │               │
+   │                     │                │                 │      status   │               │               │
+   │                     │                │                 │ ◄─────────────│               │               │
    │                     │                │                 │               │               │               │
-   │                     │  14. Notify    │                 │               │               │               │
+   │                     │  15. Notify    │                 │               │               │               │
    │                     │ ◄───────────── │     user        │               │               │               │
-   │  15. Success msg    │                │                 │               │               │               │
+   │  16. Success msg    │                │                 │               │               │               │
    │ ◄────────────────── │                │                 │               │               │               │
    │                     │                │                 │               │               │               │
 ```
@@ -292,48 +323,53 @@ This document outlines the design for transforming InstaPost from a single-user 
 
 | From | To | Mechanism | Data Format | Purpose |
 |------|----|-----------|-------------|---------|
-| Bot → Celery | Redis (Celery broker) | Task message | JSON (pickled) | Schedule background jobs |
-| Celery → Bot | PostgreSQL (shared) | Database row | SQL records | Task results, status updates |
-| Celery Beat → Celery | Redis (Celery broker) | Periodic task | JSON | Trigger scheduled checks |
-| Bot → Bot | Redis (cache) | Key-value | JSON/string | Session state, rate limits |
+| Bot → Worker | PostgreSQL (task_queue + NOTIFY) | INSERT + pg_notify | SQL row + channel | Schedule background jobs |
+| Worker → Bot | PostgreSQL (task_queue) | UPDATE status | SQL row | Task results, status updates |
+| pg_cron → Worker | PostgreSQL (task_queue + NOTIFY) | INSERT + pg_notify | SQL row | Trigger periodic tasks |
+| Bot → Bot | PostgreSQL (sessions table) | SELECT/UPDATE | JSONB | Session state |
+| Bot → Bot | PostgreSQL (rate_limits table) | SELECT/UPDATE | SQL row | Rate limiting |
 
 #### 2.4.8 Failure Modes & Recovery
 
 | Component Failure | Impact | Recovery | Data Loss |
 |-------------------|--------|----------|-----------|
 | **Bot container dies** | No new messages processed | Auto-restart via Podman | None (stateless) |
-| **Celery worker dies** | Tasks queue up in Redis | Auto-restart, tasks retry | None (tasks persist in Redis) |
-| **Redis dies** | Sessions lost, tasks queued in memory | Restart, RDB restore | Recent cache only |
+| **Worker container dies** | Tasks queue up in PostgreSQL | Auto-restart, tasks retry | None (tasks persist in DB) |
 | **PostgreSQL dies** | Complete service outage | Restore from backup | Up to last backup |
 | **Network to Telegram** | Can't receive/send messages | Retry with backoff | Messages queued by Telegram |
 | **Network to Dropbox** | Can't upload images | Task retry (5 attempts) | None (retry) |
 | **Network to Instagram** | Can't publish posts | Task retry (5 attempts) | None (retry) |
 
+**Advantage of PostgreSQL-only**: All state persists in one place. No split-brain scenarios between Redis and PostgreSQL.
+
 #### 2.4.9 Deployment Topology Options
 
-**Option A: Single VPS (Development/Small Scale)**
+**Option A: Single VPS (Recommended)**
 ```
 ┌─────────────────────────────────┐
 │         Single VPS              │
-│  (4GB RAM, 2 CPU, 80GB SSD)    │
+│  (2GB RAM, 1 CPU, 40GB SSD)    │
 │                                 │
-│  All containers + volumes       │
-│  on single machine              │
+│  ├── instapost-bot              │
+│  ├── instapost-worker           │
+│  └── PostgreSQL                 │
 │                                 │
-│  Cost: ~$20-40/month            │
+│  Cost: ~$10-20/month            │
 └─────────────────────────────────┘
 ```
 
-**Option B: Managed Services (Production)**
+**Option B: Managed PostgreSQL (Production)**
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   VPS           │    │ Managed         │    │ Managed         │
-│   (Bot +        │◄──►│ PostgreSQL      │    │ Redis           │
-│   Celery)       │    │ (e.g., Supabase)│◄──►│ (e.g., Upstash) │
-│                 │    │                 │    │                 │
-│ Cost: $10-20/mo │    │ Cost: $0-25/mo  │    │ Cost: $0-10/mo  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+┌─────────────────┐         ┌─────────────────────┐
+│   VPS           │         │ Managed PostgreSQL  │
+│   (Bot +        │◄───────►│ (Supabase, Neon,    │
+│   Worker)       │   TCP   │  Railway, etc.)     │
+│                 │  :5432  │                     │
+│ Cost: $5-10/mo  │         │ Cost: $0-25/mo      │
+└─────────────────┘         └─────────────────────┘
 ```
+
+**Simpler than before**: No Redis to manage. One database handles everything.
 
 ---
 
@@ -891,103 +927,163 @@ Your limit resets on {reset_date}.
 
 ## 6. Background Job Processing
 
-### 6.1 Celery Tasks
+Uses PostgreSQL-based task queue with LISTEN/NOTIFY (no Redis/Celery needed).
+
+### 6.1 Worker Process
 
 ```python
-# tasks.py
+# worker.py - Async worker using PostgreSQL LISTEN/NOTIFY
 
-@celery.task(bind=True, max_retries=3)
-def process_scheduled_post(self, post_id: int):
-    """Process a scheduled post at its designated time."""
-    try:
-        post = get_post(post_id)
-        user = get_user(post.user_id)
+import asyncio
+import asyncpg
+from datetime import datetime
 
-        # Check user's quota
-        if not check_quota(user):
-            notify_user(user, "quota_exceeded")
+class TaskWorker:
+    def __init__(self, db_url: str):
+        self.db_url = db_url
+        self.handlers = {
+            'post_to_instagram': self.handle_post_to_instagram,
+            'send_notification': self.handle_send_notification,
+            'cleanup_images': self.handle_cleanup_images,
+            'send_expiry_reminder': self.handle_expiry_reminder,
+        }
+
+    async def run(self):
+        """Main worker loop."""
+        self.conn = await asyncpg.connect(self.db_url)
+
+        # Listen for new task notifications
+        await self.conn.add_listener('new_task', self.on_new_task)
+
+        print("Worker started, listening for tasks...")
+
+        # Also poll periodically (in case NOTIFY is missed)
+        while True:
+            await self.process_pending_tasks()
+            await asyncio.sleep(5)  # Poll every 5 seconds
+
+    def on_new_task(self, conn, pid, channel, payload):
+        """Called when new task is inserted."""
+        asyncio.create_task(self.process_pending_tasks())
+
+    async def process_pending_tasks(self):
+        """Claim and process pending tasks."""
+        while True:
+            # Claim one task atomically
+            task = await self.conn.fetchrow('''
+                UPDATE task_queue
+                SET status = 'running', started_at = NOW()
+                WHERE id = (
+                    SELECT id FROM task_queue
+                    WHERE status = 'pending'
+                      AND scheduled_for <= NOW()
+                      AND attempts < max_attempts
+                    ORDER BY priority DESC, scheduled_for ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                )
+                RETURNING *
+            ''')
+
+            if not task:
+                break  # No more tasks
+
+            await self.execute_task(task)
+
+    async def execute_task(self, task):
+        """Execute a single task with error handling."""
+        try:
+            handler = self.handlers.get(task['task_type'])
+            if handler:
+                await handler(task['payload'])
+
+            # Mark completed
+            await self.conn.execute('''
+                UPDATE task_queue
+                SET status = 'completed', completed_at = NOW()
+                WHERE id = $1
+            ''', task['id'])
+
+        except Exception as e:
+            # Mark failed, increment attempts
+            await self.conn.execute('''
+                UPDATE task_queue
+                SET status = CASE
+                        WHEN attempts + 1 >= max_attempts THEN 'failed'
+                        ELSE 'pending'
+                    END,
+                    attempts = attempts + 1,
+                    last_error = $2,
+                    scheduled_for = NOW() + INTERVAL '1 minute' * attempts
+                WHERE id = $1
+            ''', task['id'], str(e))
+
+    async def handle_post_to_instagram(self, payload: dict):
+        """Process a scheduled Instagram post."""
+        post_id = payload['post_id']
+        post = await self.get_post(post_id)
+        user = await self.get_user(post['user_id'])
+
+        # Check quota
+        if not await self.check_quota(user):
+            await self.notify_user(user['id'], "quota_exceeded")
             return
 
         # Upload to Dropbox
-        dropbox_url = upload_to_dropbox(post.image_path, user)
+        dropbox_url = await self.upload_to_dropbox(post['image_path'])
 
         # Post to Instagram
-        instagram_url = post_to_instagram(
-            dropbox_url,
-            post.caption,
-            user.instagram_account
+        instagram_url = await self.post_to_instagram(
+            dropbox_url, post['caption'], user['instagram_account_id']
         )
 
         # Update post status
-        mark_post_complete(post, instagram_url)
+        await self.conn.execute('''
+            UPDATE posts SET status = 'completed', instagram_url = $2
+            WHERE id = $1
+        ''', post_id, instagram_url)
 
         # Notify user
-        notify_user(user, "post_success", post=post, url=instagram_url)
+        await self.notify_user(user['id'], f"✅ Posted! {instagram_url}")
 
-        # Update usage
-        increment_usage(user)
-
-    except Exception as e:
-        self.retry(countdown=60 * (2 ** self.request.retries))
-
-
-@celery.task
-def send_pre_post_notification(post_id: int):
-    """Send notification before scheduled post."""
-    post = get_post(post_id)
-    user = get_user(post.user_id)
-
-    if user.settings.notification_enabled:
-        send_telegram_message(
-            user.id,
-            f"⏰ Reminder: Your post will be published in 15 minutes!\n\n"
-            f"📷 {post.filename}\n"
-            f"📱 {post.instagram_account}"
-        )
-
-
-@celery.task
-def check_subscription_renewals():
-    """Daily task to check and process subscription renewals."""
-    expiring_soon = get_subscriptions_expiring_in(days=3)
-
-    for sub in expiring_soon:
-        notify_user(sub.user, "subscription_expiring", sub=sub)
-
-
-@celery.task
-def cleanup_expired_images():
-    """Daily task to remove old uploaded images from Dropbox."""
-    # Keep images for 7 days after posting
-    old_posts = get_posts_older_than(days=7)
-
-    for post in old_posts:
-        delete_from_dropbox(post.dropbox_path)
-        mark_image_cleaned(post)
+    # ... other handlers ...
 ```
 
-### 6.2 Celery Beat Schedule
+### 6.2 Enqueuing Tasks
 
 ```python
-CELERYBEAT_SCHEDULE = {
-    'check-scheduled-posts': {
-        'task': 'tasks.check_scheduled_posts',
-        'schedule': 60.0,  # Every minute
-    },
-    'check-subscription-renewals': {
-        'task': 'tasks.check_subscription_renewals',
-        'schedule': crontab(hour=9, minute=0),  # Daily at 9 AM
-    },
-    'cleanup-expired-images': {
-        'task': 'tasks.cleanup_expired_images',
-        'schedule': crontab(hour=3, minute=0),  # Daily at 3 AM
-    },
-    'send-usage-reports': {
-        'task': 'tasks.send_weekly_usage_reports',
-        'schedule': crontab(day_of_week=0, hour=10),  # Sundays at 10 AM
-    },
-}
+# From the bot, enqueue a task:
+
+async def enqueue_task(
+    conn: asyncpg.Connection,
+    task_type: str,
+    payload: dict,
+    scheduled_for: datetime = None,
+    priority: int = 0
+):
+    """Add a task to the queue. NOTIFY is triggered automatically."""
+    await conn.execute('''
+        INSERT INTO task_queue (task_type, payload, scheduled_for, priority)
+        VALUES ($1, $2, COALESCE($3, NOW()), $4)
+    ''', task_type, payload, scheduled_for, priority)
+
+
+# Example usage in bot:
+await enqueue_task(conn, 'post_to_instagram', {'post_id': 123})
+await enqueue_task(conn, 'send_notification', {'user_id': 456, 'message': 'Hello!'})
 ```
+
+### 6.3 Periodic Tasks (via pg_cron)
+
+Periodic tasks are scheduled in PostgreSQL using pg_cron extension (see section 7.3).
+
+| Task | Schedule | Description |
+|------|----------|-------------|
+| `check-scheduled-posts` | Every minute | Queue posts that are due |
+| `cleanup-cache` | Hourly | Delete expired cache entries |
+| `cleanup-sessions` | Hourly | Delete expired sessions |
+| `cleanup-rate-limits` | Hourly | Delete old rate limit entries |
+| `subscription-reminders` | Daily 9 AM | Notify users of expiring subscriptions |
 
 ---
 
@@ -1123,23 +1219,127 @@ CREATE INDEX idx_users_friends_family ON users(is_friends_family) WHERE is_frien
 CREATE INDEX idx_payment_transactions_user ON payment_transactions(user_id, created_at DESC);
 ```
 
-### 7.2 Redis Keys Structure
+### 7.2 PostgreSQL Tables for Queue, Cache, Sessions
 
+```sql
+-- Task queue (replaces Celery + Redis)
+CREATE TABLE task_queue (
+    id SERIAL PRIMARY KEY,
+    task_type VARCHAR(50) NOT NULL,  -- 'post_to_instagram', 'cleanup_images', etc.
+    payload JSONB NOT NULL,          -- Task arguments
+    status VARCHAR(20) DEFAULT 'pending',  -- pending/running/completed/failed
+    priority INT DEFAULT 0,          -- Higher = more urgent
+    scheduled_for TIMESTAMP DEFAULT NOW(),  -- When to run
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    attempts INT DEFAULT 0,
+    max_attempts INT DEFAULT 5,
+    last_error TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_task_queue_pending ON task_queue(scheduled_for)
+    WHERE status = 'pending';
+
+-- Function to notify workers of new tasks
+CREATE OR REPLACE FUNCTION notify_new_task() RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM pg_notify('new_task', NEW.id::text);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER task_notify AFTER INSERT ON task_queue
+    FOR EACH ROW EXECUTE FUNCTION notify_new_task();
+
+
+-- Session storage (replaces Redis sessions)
+CREATE TABLE sessions (
+    user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    state VARCHAR(50),               -- Current conversation state
+    data JSONB DEFAULT '{}',         -- State-specific data
+    expires_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_sessions_expires ON sessions(expires_at);
+
+
+-- Cache table (UNLOGGED = faster, no WAL, lost on crash - OK for cache)
+CREATE UNLOGGED TABLE cache (
+    key VARCHAR(255) PRIMARY KEY,
+    value JSONB NOT NULL,
+    expires_at TIMESTAMP NOT NULL
+);
+
+CREATE INDEX idx_cache_expires ON cache(expires_at);
+
+
+-- Rate limiting (sliding window)
+CREATE TABLE rate_limits (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    action VARCHAR(50) NOT NULL,     -- 'post_create', 'image_upload', etc.
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, action, timestamp)
+);
+
+CREATE INDEX idx_rate_limits_window ON rate_limits(user_id, action, timestamp);
+
+-- Clean up old rate limit entries (run via pg_cron)
+-- DELETE FROM rate_limits WHERE timestamp < NOW() - INTERVAL '1 hour';
+
+
+-- Advisory locks for distributed locking (replaces Redis locks)
+-- Usage: SELECT pg_advisory_lock(hashtext('post:123'));
+-- Usage: SELECT pg_advisory_unlock(hashtext('post:123'));
+-- Or with timeout: SELECT pg_try_advisory_lock(hashtext('post:123'));
 ```
-# Session data
-session:{user_id} -> {state, data, expires_at}
 
-# Rate limiting
-rate_limit:{user_id}:{action} -> count (expires)
+### 7.3 pg_cron Scheduled Jobs
 
-# Locks for concurrent operations
-lock:post:{post_id} -> 1 (with TTL)
-lock:user:{user_id}:posting -> 1 (with TTL)
+```sql
+-- Enable pg_cron extension
+CREATE EXTENSION IF NOT EXISTS pg_cron;
 
-# Cache
-cache:user:{user_id} -> {user_data}
-cache:plan:{plan_name} -> {plan_limits}
-cache:instagram:{account_id}:info -> {account_info}
+-- Check for scheduled posts every minute
+SELECT cron.schedule('check-scheduled-posts', '* * * * *', $$
+    INSERT INTO task_queue (task_type, payload)
+    SELECT 'post_to_instagram', jsonb_build_object('post_id', id)
+    FROM posts
+    WHERE status = 'pending'
+      AND scheduled_time <= NOW()
+      AND NOT EXISTS (
+          SELECT 1 FROM task_queue
+          WHERE task_type = 'post_to_instagram'
+            AND payload->>'post_id' = posts.id::text
+            AND status IN ('pending', 'running')
+      );
+$$);
+
+-- Clean up expired cache entries every hour
+SELECT cron.schedule('cleanup-cache', '0 * * * *', $$
+    DELETE FROM cache WHERE expires_at < NOW();
+$$);
+
+-- Clean up expired sessions every hour
+SELECT cron.schedule('cleanup-sessions', '0 * * * *', $$
+    DELETE FROM sessions WHERE expires_at < NOW();
+$$);
+
+-- Clean up old rate limit entries every hour
+SELECT cron.schedule('cleanup-rate-limits', '0 * * * *', $$
+    DELETE FROM rate_limits WHERE timestamp < NOW() - INTERVAL '1 hour';
+$$);
+
+-- Send subscription expiry reminders daily at 9 AM
+SELECT cron.schedule('subscription-reminders', '0 9 * * *', $$
+    INSERT INTO task_queue (task_type, payload)
+    SELECT 'send_expiry_reminder', jsonb_build_object('user_id', user_id)
+    FROM subscriptions
+    WHERE current_period_end BETWEEN NOW() AND NOW() + INTERVAL '3 days'
+      AND status = 'active';
+$$);
 ```
 
 ---
@@ -1460,9 +1660,8 @@ With $75/month infrastructure cost:
 TELEGRAM_BOT_TOKEN=xxx
 TELEGRAM_WEBHOOK_URL=https://...
 
-# Database
+# Database (PostgreSQL handles everything - data, cache, queue, sessions)
 DATABASE_URL=postgresql://user:pass@host:5432/instapost
-REDIS_URL=redis://localhost:6379/0
 
 # Telegram Payments (native - no third-party accounts needed)
 # Stars and Crypto via @wallet are both native to Telegram
