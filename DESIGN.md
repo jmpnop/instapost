@@ -927,7 +927,21 @@ Your limit resets on {reset_date}.
 
 ## 6. Background Job Processing
 
-Uses PostgreSQL-based task queue with LISTEN/NOTIFY (no Redis/Celery needed).
+### Why PostgreSQL as Task Queue
+
+PostgreSQL provides a robust, transactional task queue that eliminates the need for external systems like Redis/RabbitMQ:
+
+| Feature | Benefit |
+|---------|---------|
+| **ACID compliance** | Tasks never lost, no duplicates, atomic state changes |
+| **LISTEN/NOTIFY** | Real-time push notifications to workers (no polling delay) |
+| **FOR UPDATE SKIP LOCKED** | Safe concurrent task claiming without race conditions |
+| **JSONB payloads** | Flexible task data, queryable, indexable |
+| **Rich SQL** | Query, filter, prioritize, retry logic all in SQL |
+| **Row-level locking** | Multiple workers safely grab different tasks |
+| **Single source of truth** | Task state and application data in same transaction |
+
+**Trade-off**: Dedicated message brokers (RabbitMQ, Redis) handle higher throughput. PostgreSQL is ideal for moderate workloads (thousands of tasks/minute) - perfect for InstaPost's scale.
 
 ### 6.1 Worker Process
 
