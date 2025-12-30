@@ -190,9 +190,10 @@ class Subscription:
     user_id: int                     # FK to User
     plan: str                        # free/basic/pro/business/friends_family
     status: str                      # active/cancelled/expired
-    payment_method: str | None       # stars/crypto/None (for free/F&F)
+    payment_method: str | None       # stars/crypto/card/None (for free/F&F)
     telegram_payment_id: str | None  # Telegram payment charge ID
-    stars_balance: int               # Accumulated Stars (if using Stars)
+    provider_payment_id: str | None  # Provider charge ID (Stripe, etc.)
+    currency: str | None             # XTR, USD, TON, etc.
     current_period_start: datetime
     current_period_end: datetime     # For F&F: set to far future (2099-12-31)
     auto_renew: bool                 # User preference for auto-renewal
@@ -209,11 +210,34 @@ class UsageTracking:
     storage_used_mb: float           # Storage used
 ```
 
-### 4.3 Payment Flow (Telegram Payments)
+### 4.3 Payment Methods
 
-Telegram supports two native payment methods:
-- **Telegram Stars** - In-app currency, easy micropayments
-- **Cryptocurrency** - TON and other supported cryptos via @wallet
+Telegram Bot Payments API supports multiple payment methods:
+
+| Method | Provider | Platforms | Best For |
+|--------|----------|-----------|----------|
+| **Telegram Stars** | Native | All (iOS, Android, Desktop) | Digital goods, universal |
+| **Cryptocurrency** | @wallet (TON) | All | Crypto-native users |
+| **Credit/Debit Card** | Stripe, ECOMMPAY, etc. | Android, Desktop* | Traditional payments |
+| **Apple Pay** | Via Stripe | iOS, macOS | Quick checkout |
+| **Google Pay** | Via Stripe | Android | Quick checkout |
+
+*iOS users cannot pay for digital goods via card (Apple restriction) - use Stars instead.
+
+#### Supported Card Payment Providers
+
+| Provider | Coverage | Setup |
+|----------|----------|-------|
+| **Stripe** | Global (200+ countries) | @StripeBot |
+| **ECOMMPAY** | Europe, CIS | @EcommpayBot |
+| **LiqPay** | Ukraine, Eastern Europe | @LiqPayBot |
+| **Yandex.Money** | Russia | @YooMoneyBot |
+| **Sberbank** | Russia | @SbsPayBot |
+| **Payme** | Uzbekistan | @PaymeBot |
+| **CLICK** | Uzbekistan | @ClickUzBot |
+| **Tranzzo** | Ukraine | @TranzzoPay |
+
+### 4.4 Payment Flow
 
 ```
 User selects /upgrade
@@ -221,8 +245,7 @@ User selects /upgrade
         ▼
 ┌───────────────────┐
 │ Show plan options │
-│ with Stars/Crypto │
-│ prices            │
+│ with prices       │
 └─────────┬─────────┘
           │
           ▼
@@ -231,27 +254,26 @@ User selects /upgrade
 └─────────┬─────────┘
           │
           ▼
-┌───────────────────┐
-│ Choose payment    │
-│ method            │
-│ [⭐ Stars] [💎 Crypto]│
-└─────────┬─────────┘
+┌─────────────────────────────────────┐
+│ Choose payment method               │
+│ [⭐ Stars] [💎 Crypto] [💳 Card]    │
+└─────────┬───────────────────────────┘
           │
-    ┌─────┴─────┐
-    │           │
-    ▼           ▼
-[Stars]      [Crypto]
-    │           │
-    ▼           ▼
-┌─────────┐ ┌─────────┐
-│ Send    │ │ Generate│
-│ Invoice │ │ TON/USDT│
-│ (Stars) │ │ invoice │
-└────┬────┘ └────┬────┘
-     │           │
-     └─────┬─────┘
-           │
-           ▼
+    ┌─────┼─────────────┐
+    │     │             │
+    ▼     ▼             ▼
+[Stars] [Crypto]     [Card]
+    │     │             │
+    ▼     ▼             ▼
+┌───────┐ ┌───────┐ ┌────────────┐
+│ Stars │ │ TON/  │ │ Stripe/    │
+│Invoice│ │ USDT  │ │ Provider   │
+└───┬───┘ └───┬───┘ │ Invoice    │
+    │         │     └─────┬──────┘
+    │         │           │
+    └────┬────┴───────────┘
+         │
+         ▼
 ┌───────────────────┐
 │ User completes    │
 │ payment in        │
@@ -267,19 +289,34 @@ User selects /upgrade
           ▼
 ┌───────────────────┐
 │ SuccessfulPayment │
-│ updates DB        │
+│ callback          │
 └─────────┬─────────┘
           │
           ▼
 ┌───────────────────┐
-│ Notify user of    │
-│ successful upgrade│
+│ Activate          │
+│ subscription      │
+└─────────┬─────────┘
+          │
+          ▼
+┌───────────────────┐
+│ Notify user       │
 └───────────────────┘
 ```
 
-### 4.4 Telegram Payment Handlers
+### 4.5 Payment Handlers
 
 ```python
+# Determine payment method from currency
+def get_payment_method(currency: str) -> str:
+    if currency == "XTR":
+        return "stars"
+    elif currency in ("TON", "USDT", "BTC", "ETH"):
+        return "crypto"
+    else:
+        return "card"  # USD, EUR, etc.
+
+
 # Handle pre-checkout query (validate before payment)
 async def pre_checkout_handler(update: Update, context: ContextTypes):
     query = update.pre_checkout_query
@@ -296,7 +333,7 @@ async def pre_checkout_handler(update: Update, context: ContextTypes):
     await query.answer(ok=True)
 
 
-# Handle successful payment
+# Handle successful payment (works for Stars, Crypto, and Card)
 async def successful_payment_handler(update: Update, context: ContextTypes):
     payment = update.message.successful_payment
     user_id = update.effective_user.id
@@ -304,35 +341,83 @@ async def successful_payment_handler(update: Update, context: ContextTypes):
     # Extract payment details
     plan = payment.invoice_payload
     amount = payment.total_amount
-    currency = payment.currency  # "XTR" for Stars, or crypto
-    charge_id = payment.telegram_payment_charge_id
+    currency = payment.currency
+    telegram_charge_id = payment.telegram_payment_charge_id
+    provider_charge_id = payment.provider_payment_charge_id  # For card payments
+
+    # Determine payment method
+    payment_method = get_payment_method(currency)
 
     # Activate subscription
     activate_subscription(
         user_id=user_id,
         plan=plan,
-        payment_method="stars" if currency == "XTR" else "crypto",
-        payment_id=charge_id
+        payment_method=payment_method,
+        telegram_payment_id=telegram_charge_id,
+        provider_payment_id=provider_charge_id  # Stripe charge ID, etc.
     )
 
     await update.message.reply_text(
         f"✅ Payment successful! Your {plan} plan is now active."
     )
+
+
+# Create invoice for different payment methods
+async def send_payment_invoice(
+    chat_id: int,
+    plan: str,
+    payment_method: str,
+    context: ContextTypes
+):
+    prices = PLAN_PRICES[plan]
+
+    if payment_method == "stars":
+        # Stars payment (native, no provider token needed)
+        await context.bot.send_invoice(
+            chat_id=chat_id,
+            title=f"InstaPost {plan.title()} Plan",
+            description=f"Monthly subscription to {plan} plan",
+            payload=f"{plan}_monthly",
+            currency="XTR",
+            prices=[LabeledPrice("Subscription", prices["stars"])],
+        )
+    elif payment_method == "card":
+        # Card payment via Stripe (or other provider)
+        await context.bot.send_invoice(
+            chat_id=chat_id,
+            title=f"InstaPost {plan.title()} Plan",
+            description=f"Monthly subscription to {plan} plan",
+            payload=f"{plan}_monthly",
+            provider_token=STRIPE_PROVIDER_TOKEN,
+            currency="USD",
+            prices=[LabeledPrice("Subscription", prices["usd_cents"])],
+            need_email=True,
+        )
 ```
 
-### 4.5 Pricing in Stars and Crypto
+### 4.6 Pricing
 
-| Plan | Stars/month | TON/month | USDT/month |
-|------|-------------|-----------|------------|
-| Basic | 450 ⭐ | 1.5 TON | $9 |
-| Pro | 1,450 ⭐ | 5 TON | $29 |
-| Business | 4,950 ⭐ | 17 TON | $99 |
+| Plan | USD | Stars | TON | USDT |
+|------|-----|-------|-----|------|
+| Basic | $9/mo | 450 ⭐ | ~1.5 TON | $9 |
+| Pro | $29/mo | 1,450 ⭐ | ~5 TON | $29 |
+| Business | $99/mo | 4,950 ⭐ | ~17 TON | $99 |
 
-**Notes:**
+**Payment Method Notes:**
+
+| Method | Commission | Notes |
+|--------|------------|-------|
+| Stars | 0% from Telegram | Apple/Google take 30% when user buys Stars |
+| Crypto | ~0-1% | Network fees only |
+| Card (Stripe) | 2.9% + $0.30 | Standard Stripe fees |
+| Apple Pay | 2.9% + $0.30 | Via Stripe, same fees |
+| Google Pay | 2.9% + $0.30 | Via Stripe, same fees |
+
+**Pricing Notes:**
 - Star prices based on ~$0.02 per Star
-- TON prices fluctuate with market (recalculated daily)
-- USDT provides stable crypto option
-- Annual plans: 2 months free (10 months price)
+- TON prices recalculated daily based on market rate
+- Annual plans: 2 months free (pay for 10 months)
+- All payment methods available based on user's platform
 
 ---
 
@@ -755,14 +840,31 @@ CREATE TABLE subscriptions (
     user_id BIGINT UNIQUE REFERENCES users(id) ON DELETE CASCADE,
     plan VARCHAR(20) DEFAULT 'free',  -- free/basic/pro/business/friends_family
     status VARCHAR(20) DEFAULT 'active',  -- active/cancelled/expired
-    payment_method VARCHAR(20),  -- stars/crypto/NULL (for free/F&F)
+    payment_method VARCHAR(20),  -- stars/crypto/card/NULL (for free/F&F)
     telegram_payment_id VARCHAR(255),  -- Telegram payment charge ID
-    stars_balance INT DEFAULT 0,  -- Accumulated Stars
+    provider_payment_id VARCHAR(255),  -- Provider charge ID (Stripe, etc.)
+    currency VARCHAR(10),  -- XTR, USD, TON, EUR, etc.
     current_period_start TIMESTAMP,
     current_period_end TIMESTAMP,  -- For F&F: 2099-12-31
     auto_renew BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Payment transactions (history of all payments)
+CREATE TABLE payment_transactions (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    subscription_id INT REFERENCES subscriptions(id),
+    amount INT NOT NULL,  -- In smallest units (cents, stars)
+    currency VARCHAR(10) NOT NULL,  -- XTR, USD, EUR, TON, etc.
+    payment_method VARCHAR(20) NOT NULL,  -- stars/crypto/card
+    provider VARCHAR(50),  -- stripe/liqpay/ecommpay/wallet/NULL
+    telegram_payment_id VARCHAR(255),
+    provider_payment_id VARCHAR(255),
+    status VARCHAR(20) DEFAULT 'completed',  -- completed/refunded/failed
+    refund_id VARCHAR(255),  -- If refunded
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Usage tracking
@@ -818,6 +920,7 @@ CREATE INDEX idx_posts_scheduled_time ON posts(scheduled_time) WHERE status = 'p
 CREATE INDEX idx_usage_user_period ON usage_tracking(user_id, period_start);
 CREATE INDEX idx_subscriptions_status ON subscriptions(status);
 CREATE INDEX idx_users_friends_family ON users(is_friends_family) WHERE is_friends_family = TRUE;
+CREATE INDEX idx_payment_transactions_user ON payment_transactions(user_id, created_at DESC);
 ```
 
 ### 7.2 Redis Keys Structure
@@ -1161,15 +1264,23 @@ TELEGRAM_WEBHOOK_URL=https://...
 DATABASE_URL=postgresql://user:pass@host:5432/instapost
 REDIS_URL=redis://localhost:6379/0
 
-# Telegram Payments
-TELEGRAM_PAYMENT_TOKEN=xxx  # Provider token for payments (if using external provider)
-# Note: Telegram Stars payments are native and don't require additional tokens
-# Crypto payments via @wallet bot are also native to Telegram
+# Telegram Payments - Provider Tokens
+# Get these from BotFather > Bot Settings > Payments > choose provider
+STRIPE_PROVIDER_TOKEN=xxx              # From @StripeBot (global)
+ECOMMPAY_PROVIDER_TOKEN=xxx            # From @EcommpayBot (Europe/CIS)
+LIQPAY_PROVIDER_TOKEN=xxx              # From @LiqPayBot (Ukraine)
+# Add other providers as needed based on target regions
 
-# Pricing (in Stars)
-PRICE_BASIC_STARS=450
-PRICE_PRO_STARS=1450
-PRICE_BUSINESS_STARS=4950
+# Note: Stars payments are native (no token needed)
+# Note: Crypto payments via @wallet are also native
+
+# Pricing (in smallest units)
+PRICE_BASIC_STARS=450                  # 450 Stars
+PRICE_BASIC_USD_CENTS=900              # $9.00
+PRICE_PRO_STARS=1450                   # 1,450 Stars
+PRICE_PRO_USD_CENTS=2900               # $29.00
+PRICE_BUSINESS_STARS=4950              # 4,950 Stars
+PRICE_BUSINESS_USD_CENTS=9900          # $99.00
 
 # Dropbox
 DROPBOX_APP_KEY=xxx
