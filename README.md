@@ -139,18 +139,12 @@ instapost/
    cd instapost
    ```
 
-2. **Create and activate a virtual environment** (recommended):
+2. **Install dependencies**:
    ```bash
-   uv venv
-   source .venv/bin/activate
+   uv sync
    ```
 
-3. **Install the package in development mode**:
-   ```bash
-   uv pip install -e .
-   ```
-
-4. **Create required directories**:
+3. **Create required directories**:
    ```bash
    mkdir -p images processed logs
    ```
@@ -346,53 +340,55 @@ Format: `WEEKLY_SCHEDULE="0:07:00,2:11:00,4:17:00,5:09:00,6:18:00"`
 
 **The `instapost` CLI is the universal command center for all operations.**
 
+**All commands use `uv run` to execute in the virtual environment:**
+
 ### Quick Start
 ```bash
 # Start all daemons (watcher, scheduler, mover)
-instapost start
+uv run instapost start
 
 # Check status
-instapost status
+uv run instapost status
 
 # Stop all daemons
-instapost stop
+uv run instapost stop
 ```
 
 ### Daemon Management
 ```bash
-instapost start          # Start all daemons
-instapost stop           # Stop all daemons
-instapost status         # Check daemon status
-instapost restart        # Restart all daemons
-instapost health         # System health check
+uv run instapost start          # Start all daemons
+uv run instapost stop           # Stop all daemons
+uv run instapost status         # Check daemon status
+uv run instapost restart        # Restart all daemons
+uv run instapost health         # System health check
 ```
 
 ### Queue Management
 ```bash
-instapost queue                              # View scheduled posts
-instapost cancel <filename>                  # Remove from schedule
-instapost reschedule <filename> <new-time>   # Change post time
+uv run instapost queue                              # View scheduled posts
+uv run instapost cancel <filename>                  # Remove from schedule
+uv run instapost reschedule <filename> <new-time>   # Change post time
 ```
 
 ### Monitoring
 ```bash
-instapost logs                   # View all daemon logs
-instapost logs -d scheduler      # View specific daemon
-instapost logs -f                # Follow logs in real-time
+uv run instapost logs                   # View all daemon logs
+uv run instapost logs -d scheduler      # View specific daemon
+uv run instapost logs -f                # Follow logs in real-time
 ```
 
 ### Account & Posts
 ```bash
-instapost account-info   # Get Instagram account info
-instapost recent-media   # View recent posts
-instapost token-info     # Check token validity
-instapost history        # View posting history with URLs
-instapost history -n 25  # Last 25 posts
+uv run instapost account-info   # Get Instagram account info
+uv run instapost recent-media   # View recent posts
+uv run instapost token-info     # Check token validity
+uv run instapost history        # View posting history with URLs
+uv run instapost history -n 25  # Last 25 posts
 ```
 
 ### Manual Posting
 ```bash
-instapost post path/to/image.jpg --caption "Your caption here"
+uv run instapost post path/to/image.jpg --caption "Your caption here"
 ```
 
 ### Advanced: Individual Daemon Control
@@ -412,7 +408,7 @@ Set `TEST_MODE=true` in `.env` to process posts immediately (bypasses schedule):
 TEST_MODE=true
 
 # Restart daemons to apply
-instapost restart
+uv run instapost restart
 ```
 
 ### Adding Captions to Posts
@@ -475,8 +471,8 @@ Image validation failed: Image too small: 200x200 (min 320x320)
 
 **View your posting history:**
 ```bash
-instapost history          # Last 10 posts (default)
-instapost history -n 25    # Last 25 posts
+uv run instapost history          # Last 10 posts (default)
+uv run instapost history -n 25    # Last 25 posts
 
 # Output shows:
 # 1. filename.jpg
@@ -512,7 +508,7 @@ Retrying in 3.0s...
 
 **Health Monitoring:**
 ```bash
-instapost health  # Check system health
+uv run instapost health  # Check system health
 
 # Reports on:
 # - Daemon status (running/stopped)
@@ -715,10 +711,10 @@ pip install \
 2. **Start the system**:
    ```bash
    # Start all daemons in background
-   instapost start
+   uv run instapost start
 
    # Verify everything is running
-   instapost health
+   uv run instapost health
    ```
 
 3. **Add images with captions** (optional):
@@ -738,22 +734,22 @@ pip install \
 4. **Monitor the queue**:
    ```bash
    # View scheduled posts
-   instapost queue
+   uv run instapost queue
 
    # View post history
-   instapost history
+   uv run instapost history
 
    # Follow logs in real-time
-   instapost logs -f
+   uv run instapost logs -f
    ```
 
 5. **Manage the schedule**:
    ```bash
    # Reschedule a post
-   instapost reschedule photo1.jpg 2025-12-31T12:00:00
+   uv run instapost reschedule photo1.jpg 2025-12-31T12:00:00
 
    # Cancel a post
-   instapost cancel photo2.jpg
+   uv run instapost cancel photo2.jpg
    ```
 
 ## 🔒 Security Notes
