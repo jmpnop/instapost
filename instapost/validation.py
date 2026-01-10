@@ -8,12 +8,13 @@ from typing import Tuple, Optional
 # https://developers.facebook.com/docs/instagram-api/reference/ig-user/media
 MIN_WIDTH = 320
 MIN_HEIGHT = 320
-MAX_WIDTH = 1440
-MAX_HEIGHT = 1440
+# Note: Instagram accepts larger images and will resize them
+# 1440px is recommended for best quality, but not a hard limit
+# We'll only enforce minimum size and aspect ratio
 MAX_FILE_SIZE_MB = 8
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
-# Aspect ratio requirements
+# Aspect ratio requirements (strictly enforced by Instagram)
 MIN_ASPECT_RATIO = 0.8  # 4:5 portrait
 MAX_ASPECT_RATIO = 1.91  # 1.91:1 landscape
 
@@ -51,15 +52,14 @@ def validate_image_file(image_path: str | Path) -> Tuple[bool, Optional[str]]:
         with Image.open(path) as img:
             width, height = img.size
 
-            # Check dimensions
+            # Check minimum dimensions
             if width < MIN_WIDTH or height < MIN_HEIGHT:
                 return False, f"Image too small: {width}x{height} (min {MIN_WIDTH}x{MIN_HEIGHT})"
 
-            # Instagram recommends max 1440px on longest side
-            if width > MAX_WIDTH or height > MAX_HEIGHT:
-                return False, f"Image too large: {width}x{height} (max {MAX_WIDTH}x{MAX_HEIGHT})"
+            # Note: No maximum dimension check - Instagram accepts large images and resizes them
+            # 1440px is recommended for optimal quality but not enforced
 
-            # Check aspect ratio
+            # Check aspect ratio (strictly enforced by Instagram)
             aspect_ratio = width / height
             if aspect_ratio < MIN_ASPECT_RATIO:
                 return False, f"Aspect ratio too portrait: {aspect_ratio:.2f} (min {MIN_ASPECT_RATIO})"
