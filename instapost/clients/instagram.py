@@ -81,11 +81,10 @@ class InstagramClient:
         except FacebookTokenError as e:
             raise ValueError(f"Error getting token information: {str(e)}")
 
-    @retry_instagram_operation
     def post_image(
         self, image_url: str, caption: str = "", location_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Post image to Instagram with automatic retry on failures.
+        """Post image to Instagram with built-in retry logic for media-not-ready errors.
 
         Args:
             image_url: URL of the image to post (must be publicly accessible).
@@ -97,7 +96,11 @@ class InstagramClient:
 
         Raises:
             ValueError: If the API request fails or the token is invalid.
-            RetryError: If all retry attempts are exhausted.
+
+        Note:
+            Has built-in retry logic specifically for Instagram's two-phase posting:
+            1. Create media container
+            2. Publish container (may need retries if media not ready)
         """
         # Validate the token before making API requests
         self._validate_token()
