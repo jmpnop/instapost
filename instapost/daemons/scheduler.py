@@ -20,54 +20,6 @@ SCHEDULE_FILE = PROJECT_ROOT / "schedule.json"
 PROCESSED_FILE = PROJECT_ROOT / "processed.json"
 IMAGES_DIR = PROJECT_ROOT / "images"
 
-def run_scheduler():
-    """Run the scheduling loop."""
-    logger.info(f"🚀 {get_version_string()}")
-    logger.info("🚀 Running scheduler loop")
-    logger.info("👀 Watching for scheduled posts...")
-    
-    # Ensure required files exist
-    if not os.path.exists(SCHEDULE_FILE):
-        save_json(SCHEDULE_FILE, [])
-    if not os.path.exists(PROCESSED_FILE):
-        save_json(PROCESSED_FILE, [])
-    
-    try:
-        while True:
-            current_time = datetime.now(TIMEZONE)
-            logger.debug(f"Checking schedule at {current_time}")
-            
-            # Process any scheduled posts that are due
-            process_scheduled_posts()
-            
-            # Show idle animation
-            show_idle_animation()
-            
-            # Always check at the start of the next minute
-            next_minute = (current_time + timedelta(minutes=1)).replace(second=0, microsecond=0)
-            sleep_seconds = (next_minute - current_time).total_seconds()
-            
-            if sleep_seconds > 0:
-                logger.debug(f"Sleeping for {sleep_seconds:.1f} seconds")
-                # Show idle animation while waiting
-                start_time = time.time()
-                while time.time() - start_time < min(sleep_seconds, 60):
-                    show_idle_animation()
-            else:
-                # In case we're already past the next minute
-                show_idle_animation()
-                time.sleep(1)
-            
-            # Process any scheduled posts that are due
-            process_scheduled_posts()
-            
-    except KeyboardInterrupt:
-        logger.info("Scheduler stopped by user")
-    except Exception as e:
-        logger.error(f"Error in scheduler: {e}", exc_info=True)
-    finally:
-        logger.info("Scheduler stopped")
-
 # [Rest of the file remains the same...]
 
 # Ensure required directories exist
