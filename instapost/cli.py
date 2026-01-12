@@ -15,6 +15,7 @@ from instapost.clients.dropbox import DropboxClient
 from instapost.clients.instagram import InstagramClient
 from instapost.utils import PROJECT_ROOT
 from instapost.schedule_utils import remove_from_schedule, update_schedule_entry, ScheduleValidationError
+from instapost.version import __version__, __build__
 
 
 @click.group()
@@ -392,6 +393,9 @@ def status():
 
     click.echo()
     click.echo("=" * 40)
+
+    # Show version info
+    click.echo(f"Version: v{__version__} (build {__build__})")
 
     # Show schedule info if files exist
     schedule_file = PROJECT_ROOT / "schedule.json"
