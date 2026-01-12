@@ -377,6 +377,16 @@ uv run instapost logs -d scheduler      # View specific daemon
 uv run instapost logs -f                # Follow logs in real-time
 ```
 
+**Log Format:**
+All log entries include PID and build number for debugging:
+```
+2026-01-12 16:26:04 [PID:18308] [Build:1768252962] - scheduler - INFO - Processing...
+```
+This helps identify:
+- Which process generated the log
+- Which code version is running
+- Duplicate processes (different PIDs for same daemon)
+
 ### Account & Posts
 ```bash
 uv run instapost account-info   # Get Instagram account info
@@ -562,7 +572,44 @@ uv run instapost health  # Check system health
 
 ### Common Issues
 
-1. **Token Issues**
+1. **Duplicate Posts / Multiple Processes Running**
+   - **Symptom**: Same image posted multiple times to Instagram
+   - **Cause**: Multiple daemon processes running concurrently
+   - **Check for duplicate processes:**
+     ```bash
+     # Check how many of each daemon are running
+     ps -ef | grep "instapost.daemons" | grep -v grep
+
+     # Should show EXACTLY 3 processes:
+     # - 1 watcher
+     # - 1 scheduler
+     # - 1 mover
+     ```
+   - **Fix:**
+     ```bash
+     # Kill all instapost processes
+     pkill -9 -f "instapost.daemons"
+
+     # Wait a moment
+     sleep 3
+
+     # Start clean
+     uv run instapost start
+
+     # Verify only 3 processes
+     ps -ef | grep "instapost.daemons" | grep -v grep | wc -l
+     # Should output: 3
+     ```
+   - **Check logs for multiple PIDs:**
+     ```bash
+     # Logs now show [PID:12345] [Build:1768252962]
+     # All entries for same daemon should have same PID
+     grep "Processing scheduled post" logs/scheduler.log | tail -5
+
+     # If you see different PIDs, you have duplicate processes
+     ```
+
+2. **Token Issues**
    - Verify token permissions:
      ```bash
      # Check token permissions in Facebook Developer Portal
