@@ -272,27 +272,29 @@ def process_file(entry: Dict[str, str]) -> Optional[Dict[str, str]]:
 
 # Track the last known schedule state
 last_schedule_count = 0
+# CRITICAL: Global set to track files currently being processed or already processed
+currently_processing = set()
 
 def process_scheduled_posts():
     """Process any scheduled posts that are due."""
-    global last_schedule_count
-    
+    global last_schedule_count, currently_processing
+
     try:
         # Load current state
         scheduled = load_json(SCHEDULE_FILE)
         processed = load_processed()
-        
+
         # Verify schedule file exists and is valid
         if not isinstance(scheduled, list):
             logger.error("❌ Invalid schedule format - treating as empty")
             scheduled = []
-            
+
         if not scheduled:
             if last_schedule_count > 0:
                 logger.info("📭 Schedule is now empty")
                 last_schedule_count = 0
             return
-            
+
         # Check for new entries
         current_count = len(scheduled)
         if current_count > last_schedule_count:
@@ -310,12 +312,14 @@ def process_scheduled_posts():
                         logger.error(f"❌ File not found: {entry['original_path']}")
                 except (ValueError, KeyError) as e:
                     logger.error(f"❌ Invalid entry data: {e}")
-                    
+
         last_schedule_count = current_count
         logger.debug(f"🔍 Found {len(scheduled)} scheduled posts to check")
-        
+
         now = datetime.now(TIMEZONE)
+        # Build set from processed.json AND currently_processing global set
         processed_filenames = {p['filename'] for p in processed} if processed else set()
+        processed_filenames.update(currently_processing)  # Include files being processed right now
         
         # Process entries that are due and not already processed
         for entry in scheduled[:]:  # Create a copy to safely modify the list
@@ -351,8 +355,9 @@ def process_scheduled_posts():
                     logger.info(f"📅 Processing scheduled post: {filename} (scheduled for {scheduled_time})")
                     logger.debug(f"📂 File path: {original_path}, exists: {os.path.exists(original_path)}")
 
-                    # CRITICAL: Mark as being processed BEFORE calling process_file to prevent concurrent processing
-                    processed_filenames.add(filename)
+                    # CRITICAL: Add to GLOBAL set to prevent concurrent processing across loop iterations
+                    currently_processing.add(filename)
+                    logger.debug(f"🔒 Locked: {filename} (marked as processing)")
 
                     try:
                         logger.debug("🔧 Calling process_file...")
@@ -364,10 +369,11 @@ def process_scheduled_posts():
                             logger.info(f"✅ Successfully processed {filename}")
                             logger.info(f"👁️  Posted: {result.get('url', 'No URL available')}")
                             logger.debug("📝 Added to processed.json - will be skipped in future iterations")
+                            # Keep in currently_processing - will be in processed.json on next reload
                         else:
-                            # Failed - remove from in-memory set so it can be retried
-                            processed_filenames.discard(filename)
-                            logger.error(f"❌ Failed to process {filename} - process_file returned None")
+                            # Failed - remove from global set so it can be retried
+                            currently_processing.discard(filename)
+                            logger.error(f"❌ Failed to process {filename} - removed from processing lock")
                     except Exception as e:
                         logger.error(f"❌ Error processing {filename}: {str(e)}", exc_info=True)
                 else:
