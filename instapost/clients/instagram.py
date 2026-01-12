@@ -134,10 +134,10 @@ class InstagramClient:
         retry_delay = 2  # Start with 2 seconds
 
         for attempt in range(max_retries):
-            logger.info(f"[RETRY LOOP] Attempt {attempt + 1}/{max_retries}")
+            print(f"[RETRY LOOP] Attempt {attempt + 1}/{max_retries}", file=sys.stderr)
 
             if attempt > 0:
-                logger.info(f"[RETRY LOOP] Waiting {retry_delay:.1f}s before retry")
+                print(f"[RETRY LOOP] Waiting {retry_delay:.1f}s before retry", file=sys.stderr)
                 time.sleep(retry_delay)
                 retry_delay *= 1.5  # Exponential backoff
 
@@ -148,31 +148,31 @@ class InstagramClient:
                 "access_token": self.config.access_token,
             }
 
-            logger.info(f"[RETRY LOOP] Calling Instagram publish API...")
+            print(f"[RETRY LOOP] Calling Instagram publish API (container: {creation_id})...", file=sys.stderr)
             publish_response = requests.post(publish_url, params=publish_params)
-            logger.info(f"[RETRY LOOP] Response status: {publish_response.status_code}")
+            print(f"[RETRY LOOP] Response status: {publish_response.status_code}", file=sys.stderr)
 
             # Check for "media not ready" error
             if not publish_response.ok:
-                logger.warning(f"[RETRY LOOP] Publish failed: {publish_response.status_code}")
+                print(f"[RETRY LOOP] Publish failed: {publish_response.status_code}", file=sys.stderr)
                 error_data = publish_response.json()
                 if error_data.get("error", {}).get("error_subcode") == 2207027:
                     # Media not ready yet, retry
                     if attempt < max_retries - 1:
-                        logger.info(f"[RETRY LOOP] Media not ready, will retry")
+                        print(f"[RETRY LOOP] Media not ready, will retry", file=sys.stderr)
                         continue  # Try again
                     else:
                         # Last attempt failed
-                        error_message = f"Failed to publish media after {max_retries} attempts: {publish_response.text}"
+                        error_message = f"[RETRY LOOP] Failed to publish media after {max_retries} attempts: {publish_response.text}"
                         raise ValueError(error_message)
                 else:
                     # Different error, don't retry
-                    logger.error(f"[RETRY LOOP] Non-retryable error")
-                    error_message = f"Failed to publish media: {publish_response.text}"
+                    print(f"[RETRY LOOP] Non-retryable error", file=sys.stderr)
+                    error_message = f"[RETRY LOOP] Failed to publish media: {publish_response.text}"
                     raise ValueError(error_message)
 
             # Success!
-            logger.info(f"[RETRY LOOP] Publish successful, breaking loop")
+            print(f"[RETRY LOOP] Publish successful, breaking loop", file=sys.stderr)
             break
 
         post_id = publish_response.json().get("id")
