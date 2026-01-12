@@ -332,9 +332,8 @@ def process_scheduled_posts():
         
         # Verify schedule file exists and is valid
         if not isinstance(scheduled, list):
-            logger.error("❌ Invalid schedule format - resetting to empty list")
+            logger.error("❌ Invalid schedule format - treating as empty")
             scheduled = []
-            save_json(SCHEDULE_FILE, scheduled)
             
         if not scheduled:
             if last_schedule_count > 0:
@@ -375,31 +374,23 @@ def process_scheduled_posts():
                 # Skip if required fields are missing
                 if not all([filename, original_path, 'time' in entry]):
                     logger.error(f"❌ Missing required fields in entry: {entry}")
-                    scheduled.remove(entry)
-                    save_json(SCHEDULE_FILE, scheduled)  # Save immediately
+                    continue
+
+                # Check if already processed (ORIGINAL DESIGN: only check, never modify schedule.json)
+                if filename in processed_filenames:
+                    logger.debug(f"⏩ Already processed: {filename}")
                     continue
 
                 # Verify file exists
                 if not os.path.exists(original_path):
-                    logger.error(f"❌ File not found, removing from schedule: {original_path}")
-                    scheduled.remove(entry)
-                    save_json(SCHEDULE_FILE, scheduled)  # Save immediately
+                    logger.warning(f"⚠️  File not found (may have been moved): {original_path}")
                     continue
 
                 # Parse scheduled time
                 try:
                     scheduled_time = datetime.fromisoformat(entry['time']).replace(tzinfo=TIMEZONE)
                 except (ValueError, TypeError) as e:
-                    logger.error(f"❌ Invalid time format in entry, removing: {entry}")
-                    scheduled.remove(entry)
-                    save_json(SCHEDULE_FILE, scheduled)  # Save immediately
-                    continue
-                
-                # Check if already processed
-                if filename in processed_filenames:
-                    logger.info(f"⏩ Skipping already processed: {filename}")
-                    scheduled.remove(entry)
-                    save_json(SCHEDULE_FILE, scheduled)  # Save immediately after removal
+                    logger.error(f"❌ Invalid time format in entry: {entry}")
                     continue
                 
                 # Process if due or in test mode
@@ -414,25 +405,22 @@ def process_scheduled_posts():
                             logger.debug("✅ Process file successful, saving to processed...")
                             processed.append(result)
                             save_processed(processed)
+                            processed_filenames.add(filename)  # Update in-memory set to skip in this loop iteration
                             logger.info(f"✅ Successfully processed {filename}")
                             logger.info(f"👁️  Posted: {result.get('url', 'No URL available')}")
-                            scheduled.remove(entry)  # Remove from schedule after successful processing
-                            save_json(SCHEDULE_FILE, scheduled)  # CRITICAL: Save immediately to prevent race condition
-                            logger.debug("📝 Schedule updated after successful processing")
+                            logger.debug("📝 Added to processed.json - will be skipped in future iterations")
                         else:
                             logger.error(f"❌ Failed to process {filename} - process_file returned None")
                     except Exception as e:
                         logger.error(f"❌ Error processing {filename}: {str(e)}", exc_info=True)
                 else:
                     logger.debug(f"⏳ Not yet due: {filename} (scheduled for {scheduled_time} > {now})")
-                        
+
             except Exception as e:
                 logger.error(f"❌ Unexpected error processing entry {entry.get('filename', 'unknown')}: {e}", exc_info=True)
-        
-        # Save the updated schedule if any entries were removed
-        if len(scheduled) < current_count:
-            save_json(SCHEDULE_FILE, scheduled)
-            logger.debug(f"📋 Updated schedule with {len(scheduled)} remaining entries")
+
+        # ORIGINAL DESIGN: Never modify schedule.json
+        # Only processed.json is updated to track completion
             
     except Exception as e:
         logger.error(f"Error processing scheduled posts: {e}", exc_info=True)
