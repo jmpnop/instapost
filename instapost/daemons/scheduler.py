@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Set
 
 from instapost.utils import load_json, save_json, PROJECT_ROOT, setup_logger, ensure_single_instance, show_idle_animation
 from instapost.settings import TIMEZONE, WEEKLY_SCHEDULE
+from instapost.version import get_version_string
 
 # Set up logging
 logger = setup_logger('scheduler')
@@ -21,6 +22,7 @@ IMAGES_DIR = PROJECT_ROOT / "images"
 
 def run_scheduler():
     """Run the scheduling loop."""
+    logger.info(f"🚀 {get_version_string()}")
     logger.info("🚀 Running scheduler loop")
     logger.info("👀 Watching for scheduled posts...")
     
@@ -374,26 +376,30 @@ def process_scheduled_posts():
                 if not all([filename, original_path, 'time' in entry]):
                     logger.error(f"❌ Missing required fields in entry: {entry}")
                     scheduled.remove(entry)
+                    save_json(SCHEDULE_FILE, scheduled)  # Save immediately
                     continue
-                
+
                 # Verify file exists
                 if not os.path.exists(original_path):
                     logger.error(f"❌ File not found, removing from schedule: {original_path}")
                     scheduled.remove(entry)
+                    save_json(SCHEDULE_FILE, scheduled)  # Save immediately
                     continue
-                    
+
                 # Parse scheduled time
                 try:
                     scheduled_time = datetime.fromisoformat(entry['time']).replace(tzinfo=TIMEZONE)
                 except (ValueError, TypeError) as e:
                     logger.error(f"❌ Invalid time format in entry, removing: {entry}")
                     scheduled.remove(entry)
+                    save_json(SCHEDULE_FILE, scheduled)  # Save immediately
                     continue
                 
                 # Check if already processed
                 if filename in processed_filenames:
                     logger.info(f"⏩ Skipping already processed: {filename}")
                     scheduled.remove(entry)
+                    save_json(SCHEDULE_FILE, scheduled)  # Save immediately after removal
                     continue
                 
                 # Process if due or in test mode
@@ -411,6 +417,7 @@ def process_scheduled_posts():
                             logger.info(f"✅ Successfully processed {filename}")
                             logger.info(f"👁️  Posted: {result.get('url', 'No URL available')}")
                             scheduled.remove(entry)  # Remove from schedule after successful processing
+                            save_json(SCHEDULE_FILE, scheduled)  # CRITICAL: Save immediately to prevent race condition
                             logger.debug("📝 Schedule updated after successful processing")
                         else:
                             logger.error(f"❌ Failed to process {filename} - process_file returned None")
@@ -447,6 +454,7 @@ def save_processed(processed: List[Dict]) -> None:
 
 def run_scheduler():
     """Run the scheduling loop."""
+    logger.info(f"🚀 {get_version_string()}")
     logger.info("🚀 Running scheduler loop")
     logger.info("👀 Watching for scheduled posts...")
     

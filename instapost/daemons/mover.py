@@ -3,15 +3,17 @@ import time
 import shutil
 from pathlib import Path
 from instapost.utils import load_json, setup_logging, show_idle_animation, PROJECT_ROOT, ensure_single_instance
+from instapost.version import get_version_string
 
 logger = setup_logging('mover')
 
 PROCESSED_FILE = "processed.json"
 
 def move_processed_files(source_dir, dest_dir):
+    logger.info(f"📦 {get_version_string()}")
     # Ensure only one instance is running
     ensure_single_instance('mover')
-    
+
     src_path = Path(source_dir)
     dst_path = Path(dest_dir)
 

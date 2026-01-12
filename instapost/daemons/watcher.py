@@ -14,6 +14,7 @@ from instapost.settings import TIMEZONE, WEEKLY_SCHEDULE
 from instapost.daemons.scheduler import get_next_scheduled_time
 from instapost.validation import validate_image_file, get_image_info
 from instapost.schedule_utils import add_to_schedule, ScheduleValidationError
+from instapost.version import get_version_string
 
 logger = setup_logging('watcher')
 
@@ -244,8 +245,9 @@ class ImageHandler(FileSystemEventHandler):
 
 def watch_directory(watch_dir):
     """Start watching a directory for new images."""
+    logger.info(f"👁️  {get_version_string()}")
     ensure_single_instance('watcher')
-    
+
     watch_path = Path(watch_dir).resolve()
     if not watch_path.exists() or not watch_path.is_dir():
         logger.error(f"Error: {watch_path} is not a valid directory")
@@ -254,7 +256,7 @@ def watch_directory(watch_dir):
     # Initialize the schedule iterator
     schedule_iterator = ScheduleIterator()
     event_handler = ImageHandler(schedule_iterator)
-    
+
     # Process existing files in the directory
     logger.info(f"Processing existing files in {watch_path}")
     
