@@ -28,34 +28,36 @@ def setup_logging(name):
 
 def setup_logger(name: str, log_level=logging.INFO) -> logging.Logger:
     """Set up a logger with the given name and log level.
-    
+
     Args:
         name: Name of the logger
         log_level: Logging level (default: logging.INFO)
-        
+
     Returns:
         Configured logger instance
     """
+    from instapost.version import __build__
+
     logger = logging.getLogger(name)
     logger.setLevel(log_level)
-    
+
     # Create console handler
     ch = logging.StreamHandler()
     ch.setLevel(log_level)
-    
-    # Create formatter
+
+    # Create formatter with PID and build number
     formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        f'%(asctime)s [PID:%(process)d] [Build:{__build__}] - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    
+
     # Add formatter to console handler
     ch.setFormatter(formatter)
-    
+
     # Add console handler to logger
     if not logger.handlers:
         logger.addHandler(ch)
-    
+
     return logger
 
 def show_idle_animation(symbol='👁️'):
