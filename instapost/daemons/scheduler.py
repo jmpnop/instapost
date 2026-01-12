@@ -350,6 +350,10 @@ def process_scheduled_posts():
                 if scheduled_time <= now or should_process_immediately(scheduled_time):
                     logger.info(f"📅 Processing scheduled post: {filename} (scheduled for {scheduled_time})")
                     logger.debug(f"📂 File path: {original_path}, exists: {os.path.exists(original_path)}")
+
+                    # CRITICAL: Mark as being processed BEFORE calling process_file to prevent concurrent processing
+                    processed_filenames.add(filename)
+
                     try:
                         logger.debug("🔧 Calling process_file...")
                         result = process_file(entry)
@@ -357,11 +361,12 @@ def process_scheduled_posts():
                             logger.debug("✅ Process file successful, saving to processed...")
                             processed.append(result)
                             save_processed(processed)
-                            processed_filenames.add(filename)  # Update in-memory set to skip in this loop iteration
                             logger.info(f"✅ Successfully processed {filename}")
                             logger.info(f"👁️  Posted: {result.get('url', 'No URL available')}")
                             logger.debug("📝 Added to processed.json - will be skipped in future iterations")
                         else:
+                            # Failed - remove from in-memory set so it can be retried
+                            processed_filenames.discard(filename)
                             logger.error(f"❌ Failed to process {filename} - process_file returned None")
                     except Exception as e:
                         logger.error(f"❌ Error processing {filename}: {str(e)}", exc_info=True)
@@ -425,13 +430,10 @@ def run_scheduler():
                 start_time = time.time()
                 while time.time() - start_time < min(sleep_seconds, 60):
                     show_idle_animation()
-                    time.sleep(2)  # Add this line
+                    time.sleep(2)
             else:
                 # In case we're already past the next minute
                 time.sleep(1)
-                
-                # Process any scheduled posts that are due
-                process_scheduled_posts()
             
     except KeyboardInterrupt:
         logger.info("Scheduler stopped by user")

@@ -123,7 +123,7 @@ def add_to_schedule(filename: str, scheduled_time: str, original_path: str, capt
 
 
 def update_schedule_entry(filename: str, new_time: Optional[str] = None, new_caption: Optional[str] = None) -> None:
-    """Update an existing schedule entry.
+    """Update an existing schedule entry, removing duplicates if they exist.
 
     Args:
         filename: Image filename to update
@@ -135,15 +135,14 @@ def update_schedule_entry(filename: str, new_time: Optional[str] = None, new_cap
     """
     schedule = load_json("schedule.json")
 
-    # Find entry
-    entry = None
-    for e in schedule:
-        if e.get('filename') == filename:
-            entry = e
-            break
+    # Find ALL entries with this filename (there might be duplicates)
+    matching_entries = [e for e in schedule if e.get('filename') == filename]
 
-    if not entry:
+    if not matching_entries:
         raise ScheduleValidationError(f"Entry not found: {filename}")
+
+    # Get the first entry as template
+    entry = matching_entries[0].copy()
 
     # Update time if provided
     if new_time:
@@ -165,6 +164,12 @@ def update_schedule_entry(filename: str, new_time: Optional[str] = None, new_cap
             entry['caption'] = new_caption
         elif 'caption' in entry:
             del entry['caption']
+
+    # Remove ALL old entries with this filename (including duplicates)
+    schedule = [e for e in schedule if e.get('filename') != filename]
+
+    # Add back the single updated entry
+    schedule.append(entry)
 
     # Save schedule
     save_json("schedule.json", schedule)
