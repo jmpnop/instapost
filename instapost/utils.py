@@ -72,42 +72,21 @@ def show_idle_animation(symbol='👁️'):
         # Not a terminal (likely logging to file), just sleep without animation
         time.sleep(2.0)
 
-def is_process_running(process_name):
-    """Check if there is any running process that contains the given name."""
-    # Iterate over all running processes
-    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-        try:
-            # Check if process name or command line contains the given name
-            if (process_name.lower() in proc.info['name'].lower() or 
-                (proc.info['cmdline'] and process_name.lower() in ' '.join(proc.info['cmdline']).lower())):
-                return True
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            continue
-    return False
-
 def ensure_single_instance(component_name):
     """Ensure only one instance of the component is running."""
-    if is_process_running(f'python.*{component_name}'):
-        print(f"Error: Another instance of {component_name} is already running.")
-        print("Please stop it before starting a new one.")
-        sys.exit(1)
-import psutil
-import sys
+    current_pid = os.getpid()
+    pattern = f'instapost.daemons.{component_name}'
 
-def is_process_running(process_name):
-    """Check if there is any running process that contains the given name."""
-    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+    for proc in psutil.process_iter(['pid', 'cmdline']):
         try:
-            if (process_name.lower() in proc.info['name'].lower() or 
-                (proc.info['cmdline'] and process_name.lower() in ' '.join(proc.info['cmdline']).lower())):
-                return True
+            if proc.pid == current_pid:
+                continue  # Skip checking ourselves
+
+            cmdline = proc.info.get('cmdline')
+            if cmdline and pattern in ' '.join(cmdline):
+                print(f"Error: Another instance of {component_name} is already running (PID: {proc.pid})")
+                print(f"Command: {' '.join(cmdline)}")
+                print("Please stop it before starting a new one: pkill -f '{pattern}'")
+                sys.exit(1)
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
-    return False
-
-def ensure_single_instance(component_name):
-    """Ensure only one instance of the component is running."""
-    if is_process_running(f'python.*{component_name}'):
-        print(f"Error: Another instance of {component_name} is already running.")
-        print("Please stop it before starting a new one.")
-        sys.exit(1)
