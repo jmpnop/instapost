@@ -3,6 +3,7 @@ import os
 import time
 import shutil
 import json
+import tempfile
 from pathlib import Path
 from datetime import datetime, time as dt_time, timedelta
 from PIL import Image, UnidentifiedImageError
@@ -163,25 +164,98 @@ class ImageHandler(FileSystemEventHandler):
         if not event.is_directory and any(event.src_path.lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS):
             self._process_file(event.src_path)
 
+    def _resize_image_if_needed(self, file_path, max_size_mb=8):
+        """Resize image if it exceeds the maximum size.
+
+        Args:
+            file_path: Path to the image file.
+            max_size_mb: Maximum file size in MB (default: 8MB for Instagram).
+
+        Returns:
+            True if image was resized, False otherwise.
+        """
+        path = Path(file_path)
+        file_size_mb = path.stat().st_size / (1024 * 1024)
+
+        if file_size_mb <= max_size_mb:
+            return False  # No resizing needed
+
+        logger.info(f"Image size ({file_size_mb:.1f}MB) exceeds {max_size_mb}MB limit. Resizing...")
+
+        try:
+            # Open the image
+            img = Image.open(path)
+
+            # Calculate the target size to get approximately max_size_mb MB
+            # Use a scaling factor based on file size ratio
+            scale_factor = (max_size_mb * 0.9 / file_size_mb) ** 0.5  # Square root for 2D scaling
+            new_width = int(img.width * scale_factor)
+            new_height = int(img.height * scale_factor)
+
+            logger.info(f"Resizing from {img.width}x{img.height} to {new_width}x{new_height}")
+
+            # Resize the image with high-quality resampling
+            img_resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+            # Save to a temporary file first
+            temp_file = tempfile.NamedTemporaryFile(
+                suffix=path.suffix,
+                delete=False,
+                mode='wb'
+            )
+            temp_path = Path(temp_file.name)
+
+            # Save with quality optimization
+            if path.suffix.lower() in ['.jpg', '.jpeg']:
+                img_resized.save(temp_path, 'JPEG', quality=85, optimize=True)
+            elif path.suffix.lower() == '.png':
+                img_resized.save(temp_path, 'PNG', optimize=True)
+            else:
+                img_resized.save(temp_path)
+
+            temp_file.close()
+
+            # Replace original file with resized version
+            shutil.move(str(temp_path), str(path))
+
+            new_size_mb = path.stat().st_size / (1024 * 1024)
+            logger.info(f"Image resized to {new_size_mb:.1f}MB")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to resize image {file_path}: {e}")
+            # Clean up temp file if it exists
+            try:
+                if temp_path and temp_path.exists():
+                    temp_path.unlink()
+            except:
+                pass
+            return False
+
     def _process_file(self, file_path, scheduled_time=None):
         """Process a new or renamed file."""
         try:
-            if not self._is_image(file_path):
-                logger.warning(f"Skipping non-image file: {file_path}")
-                return
-                
             if self._is_already_processed(file_path):
                 logger.info(f"Skipping already processed file: {file_path}")
                 return
-                
+
             if self._is_already_scheduled(file_path):
                 logger.info(f"Skipping already scheduled file: {file_path}")
                 return
-                
+
+            # Resize if needed BEFORE validation
+            self._resize_image_if_needed(file_path)
+
+            # Now validate the (possibly resized) image
+            if not self._is_image(file_path):
+                logger.warning(f"Skipping non-image file: {file_path}")
+                return
+
             # Get the next available time slot
             scheduled_time = self.schedule_iterator.next_slot()
             self._schedule_image(file_path, scheduled_time)
-            
+
         except Exception as e:
             logger.error(f"Error processing {file_path}: {e}")
 
