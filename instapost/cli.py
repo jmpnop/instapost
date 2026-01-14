@@ -77,7 +77,7 @@ def post(ctx: click.Context, image_path: str, caption: str, location_id: Optiona
 
 @cli.command()
 @click.pass_context
-def account_info(ctx: click.Context):
+def info(ctx: click.Context):
     """Get information about the Instagram business account."""
     instagram_client = ctx.obj["instagram_client"]
     
@@ -99,7 +99,7 @@ def account_info(ctx: click.Context):
 @cli.command()
 @click.option("--limit", "-n", type=int, default=5, help="Number of recent media items to display.")
 @click.pass_context
-def recent_media(ctx: click.Context, limit: int):
+def media(ctx: click.Context, limit: int):
     """Get recent media from the Instagram business account."""
     instagram_client = ctx.obj["instagram_client"]
     
@@ -160,7 +160,7 @@ def token_info(ctx: click.Context):
 
 
 @cli.command()
-def setup_dropbox():
+def dropbox():
     """Set up Dropbox authentication and get refresh token."""
     try:
         # Generate authentication flow
@@ -191,7 +191,7 @@ def _get_daemon_pids():
     """Get PIDs of running InstaPost daemons."""
     try:
         result = subprocess.run(
-            ["pgrep", "-f", "python -m instapost.daemons"],
+            ["pgrep", "-f", "instapost.daemons"],
             capture_output=True,
             text=True
         )
