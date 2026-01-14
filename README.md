@@ -22,7 +22,7 @@ A command-line tool for automating the scheduling and posting of images to Insta
 
 ### Reliability & Error Handling
 - **Retry Logic**: Auto-retry API failures with exponential backoff (5 attempts)
-- **Smart Image Validation**: Enforces Instagram requirements (dimensions, size, aspect ratio)
+- **Smart Image Validation**: Enforces Instagram requirements (dimensions, aspect ratio), auto-resizes oversized images
 - **Process Safety**: Single-instance protection prevents conflicts
 - **Health Monitoring**: System health checks (daemons, disk, schedule)
 
@@ -162,7 +162,7 @@ instapost/
 4. Run the setup command to get your DROPBOX_REFRESH_TOKEN:
 
 ```bash
-python -m instapost.cli setup-dropbox
+python -m instapost.cli dropbox
 ```
 
 5. Follow the instructions to authorize the app and get your refresh token
@@ -304,7 +304,7 @@ Create a `.env` file in the project root with the following variables:
 # 1. Get these from your Dropbox App at https://www.dropbox.com/developers/apps
 DROPBOX_APP_KEY=your_dropbox_app_key         # From Dropbox App Console -> App Key
 DROPBOX_APP_SECRET=your_dropbox_app_secret   # From Dropbox App Console -> App Secret
-# 2. Get this by running: python -m instapost.cli setup-dropbox
+# 2. Get this by running: python -m instapost.cli dropbox
 DROPBOX_REFRESH_TOKEN=your_dropbox_refresh_token
 DROPBOX_FOLDER_PATH=your_dropbox_folder_path
 
@@ -389,8 +389,8 @@ This helps identify:
 
 ### Account & Posts
 ```bash
-uv run instapost account-info   # Get Instagram account info
-uv run instapost recent-media   # View recent posts
+uv run instapost info            # Get Instagram account info
+uv run instapost media           # View recent posts
 uv run instapost token-info     # Check token validity
 uv run instapost history        # View posting history with URLs
 uv run instapost history -n 25  # Last 25 posts
@@ -463,16 +463,23 @@ cp vacation.jpg images/
 
 ### Image Validation
 
-**Images are automatically validated against Instagram requirements:**
+**Images are automatically validated and processed against Instagram requirements:**
 
 - **Dimensions**: 320px - 1440px (width and height)
-- **File Size**: Maximum 8MB
+- **File Size**: Maximum 8MB - **oversized images are automatically resized**
 - **Aspect Ratio**: 0.8 to 1.91 (4:5 portrait to 1.91:1 landscape)
 - **Format**: JPEG or PNG only
 
+**Automatic Image Resizing:**
+Images larger than 8MB are automatically resized before scheduling:
+```
+Image size (13.3MB) exceeds 8MB limit. Resizing...
+Resizing from 5120x3413 to 3763x2508
+Image resized to 1.9MB
+```
+
 **Invalid images are rejected with detailed error messages:**
 ```
-Image validation failed: File too large: 12.5MB (max 8MB)
 Image validation failed: Aspect ratio too portrait: 0.5 (min 0.8)
 Image validation failed: Image too small: 200x200 (min 320x320)
 ```
