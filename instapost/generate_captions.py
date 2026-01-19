@@ -5,60 +5,31 @@ Usage: python -m instapost.generate_captions /path/to/image/directory
 """
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
 
-CAPTION_PROMPT = """Read and analyze the image at {image_path} and write the perfect caption using niche language.
 
-NICHE FOR THIS ACCOUNT: Female Rider | Member of Women Motorcycle Club | Riding Lifestyle (USA) – New York, Boston and Florida.
-
-Key focus: not a model, not a 'girl with a bike', but a MEMBER.
-
-Rule: In addition to describing what is in the photo (context), each photo post must contain 1 key phrase/algorithmic anchor from the list of 15 anchors.
-
-Core keywords (algorithmic anchors):
-1. women motorcycle club
-2. ladies riding club
-3. female bikers
-4. women who ride
-5. motorcycle sisterhood
-6. women riders community
-7. biker women lifestyle
-8. ladies motorcycle life
-9. women on motorcycles
-10. female motorcycle riders
-11. riding club women
-12. women biker culture
-13. women empowerment riding
-14. ladies RC
-15. women-led motorcycle club
-
-Additionally, you can use (meaningfully use) HIDDEN LSI KEYS in the context of the photo.
-
-LSI signals:
-1. club patch
-2. road discipline
-3. formation ride
-4. earned respect
-5. club rules
-6. long ride day
-7. riding responsibility
-8. not a photo op
-9. part of the chapter
-10. ride speaks louder
-
-Write ONLY the caption, no explanations or metadata.
-
-Should be in less than four sentences.
-"""
+def get_caption_prompt() -> str:
+    """Get caption prompt from environment variable."""
+    prompt = os.getenv('CAPTION_PROMPT')
+    if not prompt:
+        print("Error: CAPTION_PROMPT not set in environment. Add it to .env file.", file=sys.stderr)
+        sys.exit(1)
+    return prompt
 
 
 def generate_caption(image_path: Path) -> str:
     """Generate a caption for the given image using AI CLI."""
-    prompt = CAPTION_PROMPT.format(image_path=image_path.resolve())
+    prompt_template = get_caption_prompt()
+    prompt = prompt_template.format(image_path=image_path.resolve())
 
     result = subprocess.run(
         ['claude', '-p', prompt],
