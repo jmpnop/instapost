@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Generate Instagram captions for images using Claude CLI.
-Usage: python generate_captions.py /path/to/image/directory
+Generate Instagram captions for images using AI CLI.
+Usage: python -m instapost.generate_captions /path/to/image/directory
 """
 
 import argparse
@@ -57,7 +57,7 @@ Should be in less than four sentences.
 
 
 def generate_caption(image_path: Path) -> str:
-    """Generate a caption for the given image using Claude CLI."""
+    """Generate a caption for the given image using AI CLI."""
     prompt = CAPTION_PROMPT.format(image_path=image_path.resolve())
 
     result = subprocess.run(
@@ -67,7 +67,7 @@ def generate_caption(image_path: Path) -> str:
     )
 
     if result.returncode != 0:
-        raise RuntimeError(f"Claude CLI error: {result.stderr}")
+        raise RuntimeError(f"AI CLI error: {result.stderr}")
 
     return result.stdout.strip()
 
@@ -104,7 +104,7 @@ def process_directory(directory: Path) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate Instagram captions for images using Claude CLI'
+        description='Generate Instagram captions for images using AI CLI'
     )
     parser.add_argument(
         'directory',
