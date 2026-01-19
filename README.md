@@ -73,6 +73,7 @@ instapost/
 │   ├── validation.py               # Image validation (Instagram requirements)
 │   ├── retry.py                    # Exponential backoff retry decorator
 │   ├── schedule_utils.py           # Schedule validation & management
+│   ├── generate_captions.py        # AI-powered caption generation
 │   │
 │   ├── daemons/                    # Long-running processes
 │   │   ├── watcher.py              # File system monitoring daemon
@@ -460,6 +461,34 @@ cp vacation.jpg images/
 2. Caption is read from `.txt` file
 3. Caption stored in `schedule.json`
 4. Scheduler passes caption to Instagram when posting
+
+### AI Caption Generation
+
+**Generate captions automatically using AI CLI:**
+
+```bash
+# Generate captions for all images in a directory
+python -m instapost.generate_captions /path/to/images
+
+# Example: generate captions for images in the watched directory
+python -m instapost.generate_captions ./images
+```
+
+**How it works:**
+- Scans directory for images (jpg, jpeg, png, gif, webp)
+- Skips images that already have a `.txt` caption file
+- Uses AI to analyze each image and generate a niche-appropriate caption
+- Saves caption to `image.txt` alongside each `image.jpg`
+
+**Example output:**
+```
+Found 5 image(s) in ./images
+Skipping photo1.jpg - caption already exists
+Processing photo2.jpg...
+  Created photo2.txt
+Processing photo3.jpg...
+  Created photo3.txt
+```
 
 ### Image Validation
 

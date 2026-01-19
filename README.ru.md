@@ -73,6 +73,7 @@ instapost/
 │   ├── validation.py               # Валидация изображений (требования Instagram)
 │   ├── retry.py                    # Декоратор повторных попыток с экспоненциальной задержкой
 │   ├── schedule_utils.py           # Валидация и управление расписанием
+│   ├── generate_captions.py        # Генерация подписей с помощью AI
 │   │
 │   ├── daemons/                    # Долгоживущие процессы
 │   │   ├── watcher.py              # Демон мониторинга файловой системы
@@ -454,6 +455,34 @@ cp vacation.jpg images/
 2. Подпись читается из `.txt` файла
 3. Подпись сохраняется в `schedule.json`
 4. Scheduler передает подпись в Instagram при публикации
+
+### Генерация подписей с помощью AI
+
+**Автоматическая генерация подписей с использованием AI CLI:**
+
+```bash
+# Генерация подписей для всех изображений в директории
+python -m instapost.generate_captions /path/to/images
+
+# Пример: генерация подписей для изображений в отслеживаемой директории
+python -m instapost.generate_captions ./images
+```
+
+**Как это работает:**
+- Сканирует директорию на наличие изображений (jpg, jpeg, png, gif, webp)
+- Пропускает изображения, у которых уже есть файл подписи `.txt`
+- Использует AI для анализа каждого изображения и генерации подходящей подписи
+- Сохраняет подпись в `image.txt` рядом с каждым `image.jpg`
+
+**Пример вывода:**
+```
+Found 5 image(s) in ./images
+Skipping photo1.jpg - caption already exists
+Processing photo2.jpg...
+  Created photo2.txt
+Processing photo3.jpg...
+  Created photo3.txt
+```
 
 ### Валидация изображений
 
