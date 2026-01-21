@@ -285,6 +285,26 @@ class ImageHandler(FileSystemEventHandler):
         filename = os.path.basename(file_path)
         return any(entry.get('filename') == filename for entry in schedule)
 
+    def _write_caption_to_iptc(self, image_path, caption):
+        """Write caption to IPTC Caption-Abstract metadata field."""
+        try:
+            from iptcinfo3 import IPTCInfo
+
+            # Load image metadata
+            info = IPTCInfo(str(image_path))
+
+            # Set caption in IPTC Caption-Abstract field
+            info['caption/abstract'] = caption
+
+            # Save back to image
+            info.save()
+
+            logger.info(f"Caption written to IPTC metadata ({len(caption)} chars)")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to write IPTC metadata: {e}")
+            return False
+
     def _generate_caption(self, image_path):
         """Generate caption for image if .txt file doesn't exist."""
         txt_file = Path(image_path).with_suffix('.txt')
@@ -306,6 +326,16 @@ class ImageHandler(FileSystemEventHandler):
 
             if result.returncode == 0:
                 logger.info(f"Caption generated: {txt_file.name}")
+
+                # Read the generated caption and write to IPTC metadata
+                if txt_file.exists():
+                    try:
+                        with open(txt_file, 'r', encoding='utf-8') as f:
+                            caption = f.read().strip()
+                            if caption:
+                                self._write_caption_to_iptc(image_path, caption)
+                    except Exception as e:
+                        logger.warning(f"Failed to read caption for IPTC write: {e}")
             else:
                 logger.warning(f"Failed to generate caption: {result.stderr.strip()}")
         except subprocess.TimeoutExpired:
