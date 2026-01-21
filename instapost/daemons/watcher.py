@@ -285,32 +285,49 @@ class ImageHandler(FileSystemEventHandler):
         filename = os.path.basename(file_path)
         return any(entry.get('filename') == filename for entry in schedule)
 
+    def _generate_caption(self, image_path):
+        """Generate caption for image if .txt file doesn't exist."""
+        txt_file = Path(image_path).with_suffix('.txt')
+
+        if txt_file.exists():
+            logger.info(f"Caption file already exists: {txt_file.name}")
+            return
+
+        logger.info(f"Generating caption for {os.path.basename(image_path)}...")
+
+        try:
+            import subprocess
+            result = subprocess.run(
+                [sys.executable, '-m', 'instapost.generate_captions', str(image_path)],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode == 0:
+                logger.info(f"Caption generated: {txt_file.name}")
+            else:
+                logger.warning(f"Failed to generate caption: {result.stderr.strip()}")
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Caption generation timed out for {os.path.basename(image_path)}")
+        except Exception as e:
+            logger.warning(f"Error generating caption: {e}")
+
     def _schedule_image(self, image_path, scheduled_time):
         """Schedule an image for posting with validation."""
         try:
-            # Check for optional .txt file with caption
-            caption = None
-            txt_file = Path(image_path).with_suffix('.txt')
-            if txt_file.exists():
-                try:
-                    with open(txt_file, 'r', encoding='utf-8') as f:
-                        caption = f.read().strip()
-                        if caption:
-                            logger.info(f"Found caption in .txt file: {caption[:50]}..." if len(caption) > 50 else caption)
-                except Exception as e:
-                    logger.warning(f"Failed to read .txt file for {image_path}: {e}")
+            # Generate caption if .txt file doesn't exist
+            self._generate_caption(image_path)
 
-            # Add to schedule with validation
+            # Add to schedule WITHOUT caption (captions read from .txt at posting time)
             add_to_schedule(
                 filename=os.path.basename(image_path),
                 scheduled_time=scheduled_time,
-                original_path=image_path,
-                caption=caption
+                original_path=image_path
             )
 
             scheduled_time_str = datetime.fromisoformat(scheduled_time).strftime("%Y-%m-%d %H:%M")
-            caption_info = f" with caption" if caption else ""
-            logger.info(f"Scheduled {os.path.basename(image_path)} for {scheduled_time_str}{caption_info}")
+            logger.info(f"Scheduled {os.path.basename(image_path)} for {scheduled_time_str}")
 
         except ScheduleValidationError as e:
             logger.error(f"Schedule validation failed for {image_path}: {e}")

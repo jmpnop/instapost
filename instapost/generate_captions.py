@@ -78,17 +78,38 @@ def main():
         description='Generate Instagram captions for images using AI CLI'
     )
     parser.add_argument(
-        'directory',
+        'path',
         type=Path,
-        help='Directory containing images to process'
+        help='Image file or directory containing images to process'
     )
     args = parser.parse_args()
 
-    if not args.directory.is_dir():
-        print(f"Error: {args.directory} is not a valid directory", file=sys.stderr)
-        sys.exit(1)
+    # Check if it's a file or directory
+    if args.path.is_file():
+        # Single file mode
+        if args.path.suffix.lower() not in IMAGE_EXTENSIONS:
+            print(f"Error: {args.path} is not a supported image file", file=sys.stderr)
+            sys.exit(1)
 
-    process_directory(args.directory)
+        txt_path = args.path.with_suffix('.txt')
+        if txt_path.exists():
+            print(f"Caption already exists: {txt_path}")
+            sys.exit(0)
+
+        print(f"Generating caption for {args.path.name}...")
+        try:
+            caption = generate_caption(args.path)
+            txt_path.write_text(caption, encoding='utf-8')
+            print(f"Created {txt_path.name}")
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+    elif args.path.is_dir():
+        # Directory mode
+        process_directory(args.path)
+    else:
+        print(f"Error: {args.path} is not a valid file or directory", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == '__main__':
