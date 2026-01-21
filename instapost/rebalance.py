@@ -53,28 +53,51 @@ def get_expected_slots(start_date: datetime, days: int = 365) -> List[datetime]:
 def find_gaps(scheduled_posts: List[Dict], start_date: datetime, days: int = 365) -> List[datetime]:
     """Find gaps in the schedule (expected slots with no posts).
 
+    Only finds gaps that occur BEFORE the last scheduled post.
+    This prevents spreading posts across the entire year unnecessarily.
+
     Args:
         scheduled_posts: List of scheduled post entries
         start_date: Starting date for gap detection
         days: Number of days to check
 
     Returns:
-        List of datetime slots that are empty
+        List of datetime slots that are empty (only gaps before last scheduled post)
     """
-    # Get all expected slots
-    expected_slots = get_expected_slots(start_date, days)
-
-    # Get all currently scheduled times
+    # Get all currently scheduled times (normalized for comparison)
     scheduled_times = set()
+    last_scheduled_time = None
+
     for post in scheduled_posts:
         try:
-            post_time = datetime.fromisoformat(post['time']).replace(tzinfo=TIMEZONE)
+            # Parse ISO string (already has timezone)
+            post_time = datetime.fromisoformat(post['time'])
+            # Convert to TIMEZONE if needed
+            if post_time.tzinfo is None:
+                post_time = TIMEZONE.localize(post_time)
+            else:
+                post_time = post_time.astimezone(TIMEZONE)
+            # Normalize: remove seconds and microseconds for comparison
+            post_time = post_time.replace(second=0, microsecond=0)
             scheduled_times.add(post_time)
+
+            # Track the latest scheduled time
+            if last_scheduled_time is None or post_time > last_scheduled_time:
+                last_scheduled_time = post_time
         except (ValueError, KeyError, TypeError):
             logger.warning(f"Invalid time in post: {post.get('time')}")
             continue
 
-    # Find gaps
+    # If no posts scheduled, return empty
+    if not last_scheduled_time:
+        return []
+
+    # Get all expected slots up to the last scheduled post
+    expected_slots = get_expected_slots(start_date, days)
+    # Only consider slots before or at the last scheduled post
+    expected_slots = [slot for slot in expected_slots if slot <= last_scheduled_time]
+
+    # Find gaps - slots that should be filled but aren't
     gaps = [slot for slot in expected_slots if slot not in scheduled_times]
 
     return gaps
