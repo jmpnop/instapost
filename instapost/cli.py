@@ -808,6 +808,65 @@ def health():
         return 0
 
 
+@cli.command()
+@click.option('--apply', is_flag=True, help='Apply changes (default is dry-run)')
+@click.option('--limit', '-n', type=int, default=10, help='Number of changes to show (default: 10)')
+def rebalance(apply, limit):
+    """Rebalance schedule by filling gaps with posts from the end.
+
+    By default, runs in dry-run mode and shows what would be changed.
+    Use --apply to actually rebalance the schedule.
+
+    Examples:
+        instapost rebalance              # Show what would change
+        instapost rebalance --apply      # Actually rebalance
+        instapost rebalance -n 20        # Show first 20 changes
+    """
+    from instapost.rebalance import rebalance_schedule
+
+    try:
+        result = rebalance_schedule(dry_run=not apply)
+
+        if not result['success']:
+            click.echo(f"Error: {result.get('error', 'Unknown error')}", err=True)
+            sys.exit(1)
+
+        click.echo("Schedule Rebalancing")
+        click.echo("=" * 60)
+        click.echo()
+        click.echo(f"Gaps found: {result['gaps_found']}")
+        click.echo(f"Posts to move: {result['posts_moved']}")
+        click.echo()
+
+        if result['posts_moved'] == 0:
+            click.echo("✅ Schedule is already optimal - no gaps to fill")
+            return
+
+        click.echo(result.get('message', ''))
+        click.echo()
+
+        if result.get('changes'):
+            click.echo(f"Changes (showing first {min(limit, len(result['changes']))}):")
+            click.echo("-" * 60)
+            for change in result['changes'][:limit]:
+                click.echo(f"{change['filename']}")
+                click.echo(f"  {change['old_time']} → {change['new_time']}")
+                click.echo()
+
+            if len(result['changes']) > limit:
+                click.echo(f"... and {len(result['changes']) - limit} more changes")
+                click.echo()
+
+        if not apply:
+            click.echo("Note: This was a dry-run. Use --apply to make changes.")
+        else:
+            click.echo("✅ Schedule has been rebalanced!")
+
+    except Exception as e:
+        click.echo(f"Error rebalancing schedule: {e}", err=True)
+        sys.exit(1)
+
+
 def main():
     """Entry point for the CLI."""
     cli(obj={})
