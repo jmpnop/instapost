@@ -222,10 +222,22 @@ def process_file(entry: Dict[str, str]) -> Optional[Dict[str, str]]:
             return None
             
         logger.info(f"Successfully uploaded to Dropbox: {shared_url}")
-        
-        # 2. Post to Instagram using clients/instagram.py
-        logger.info(f"Posting {shared_url} to Instagram...")
+
+        # 2. Check for caption .txt file (prioritize .txt file over schedule entry)
         caption = entry.get('caption', '')
+        txt_file = local_path.with_suffix('.txt')
+        if txt_file.exists():
+            try:
+                with open(txt_file, 'r', encoding='utf-8') as f:
+                    caption_from_file = f.read().strip()
+                    if caption_from_file:
+                        caption = caption_from_file
+                        logger.info(f"Using caption from .txt file ({len(caption)} chars)")
+            except Exception as e:
+                logger.warning(f"Failed to read .txt file: {e}")
+
+        # 3. Post to Instagram using clients/instagram.py
+        logger.info(f"Posting {shared_url} to Instagram...")
 
         cmd = [
             sys.executable,  # Use the same Python interpreter
