@@ -17,6 +17,7 @@ A command-line tool for automating the scheduling and posting of images to Insta
 - **Queue Viewing**: See all scheduled posts with countdown timers
 - **Flexible Rescheduling**: Change post times on the fly
 - **Cancellation**: Remove posts from queue anytime
+- **Schedule Rebalancing**: Automatically fills gaps by moving future posts earlier
 - **Schedule Validation**: Prevents past times and conflicts
 - **Weekly Schedule**: Configure custom posting times per day
 
@@ -369,7 +370,44 @@ uv run instapost health         # System health check
 uv run instapost queue                              # View scheduled posts
 uv run instapost cancel <filename>                  # Remove from schedule
 uv run instapost reschedule <filename> <new-time>   # Change post time
+uv run instapost rebalance                          # Preview schedule optimization
+uv run instapost rebalance --apply                  # Optimize schedule (fill gaps)
 ```
+
+### Schedule Rebalancing
+
+**Automatically optimize your posting schedule by filling gaps:**
+
+The rebalance command identifies empty time slots in your weekly schedule and fills them by moving posts from further in the future to earlier available slots.
+
+**When to use:**
+- After canceling or removing posts (creates gaps in schedule)
+- When system was down and missed posting times
+- To compact the schedule and post images sooner
+
+**How it works:**
+```bash
+# Preview what would change (dry-run)
+uv run instapost rebalance
+
+# Output:
+# Gaps found: 260
+# Posts to move: 76
+# Would move 76 posts to fill 260 gaps
+#
+# Changes (first 10):
+# 0d6242d9-59e9-48d3-aa88-9dfe003415c3.jpg
+#   2026-01-28 11:00 → 2026-01-23 17:00
+
+# Apply the rebalancing
+uv run instapost rebalance --apply
+```
+
+**Safety features:**
+- Always runs in dry-run mode by default (preview changes first)
+- Only moves unprocessed posts (already posted images stay in history)
+- Preserves chronological order (posts maintain relative ordering)
+- Fills earliest gaps first (moves posts to soonest available slots)
 
 ### Monitoring
 ```bash
