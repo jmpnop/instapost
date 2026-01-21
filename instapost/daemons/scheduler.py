@@ -223,18 +223,36 @@ def process_file(entry: Dict[str, str]) -> Optional[Dict[str, str]]:
             
         logger.info(f"Successfully uploaded to Dropbox: {shared_url}")
 
-        # 2. Check for caption .txt file (prioritize .txt file over schedule entry)
-        caption = entry.get('caption', '')
-        txt_file = local_path.with_suffix('.txt')
-        if txt_file.exists():
-            try:
-                with open(txt_file, 'r', encoding='utf-8') as f:
-                    caption_from_file = f.read().strip()
-                    if caption_from_file:
-                        caption = caption_from_file
-                        logger.info(f"Using caption from .txt file ({len(caption)} chars)")
-            except Exception as e:
-                logger.warning(f"Failed to read .txt file: {e}")
+        # 2. Get caption - check IPTC metadata first, then .txt file
+        caption = ''
+
+        # Try reading from IPTC metadata first
+        try:
+            from iptcinfo3 import IPTCInfo
+            info = IPTCInfo(str(local_path))
+            iptc_caption = info.get('caption/abstract')
+            if iptc_caption:
+                if isinstance(iptc_caption, bytes):
+                    caption = iptc_caption.decode('utf-8', errors='ignore').strip()
+                else:
+                    caption = str(iptc_caption).strip()
+                if caption:
+                    logger.info(f"Using caption from IPTC metadata ({len(caption)} chars)")
+        except Exception as e:
+            logger.debug(f"No IPTC caption found: {e}")
+
+        # Fall back to .txt file if no IPTC caption
+        if not caption:
+            txt_file = local_path.with_suffix('.txt')
+            if txt_file.exists():
+                try:
+                    with open(txt_file, 'r', encoding='utf-8') as f:
+                        caption_from_file = f.read().strip()
+                        if caption_from_file:
+                            caption = caption_from_file
+                            logger.info(f"Using caption from .txt file ({len(caption)} chars)")
+                except Exception as e:
+                    logger.warning(f"Failed to read .txt file: {e}")
 
         # 3. Post to Instagram using clients/instagram.py
         logger.info(f"Posting {shared_url} to Instagram...")
