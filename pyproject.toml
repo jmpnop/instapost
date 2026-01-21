@@ -12,6 +12,8 @@ dependencies = [
     "matplotlib>=3.10.5",
     "watchdog>=6.0.0",
     "pytz>=2025.2",
+    "iptcinfo3>=2.1.4",
+    "psutil",
 ]
 
 [project.optional-dependencies]
