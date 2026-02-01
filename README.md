@@ -1116,6 +1116,118 @@ curl -s -o /dev/null -w "%{http_code}" "https://graph.facebook.com/v18.0/me/acco
    - Pre-optimize images before adding to `images/`
    - Use appropriate image dimensions (1080x1080px recommended)
 
+## AWS EC2 Deployment
+
+### Connecting to the EC2 Instance
+
+**Instance Details:**
+- Instance ID: `i-0db574a38acd30088`
+- Public IP: `54.242.9.15`
+- OS: Amazon Linux 2023
+
+**Method 1: SSH (Recommended)**
+```bash
+# Set correct permissions on key file
+chmod 400 AWSCelestialKeyPair.pem
+
+# Connect via SSH
+ssh -i AWSCelestialKeyPair.pem ec2-user@54.242.9.15
+```
+
+**Method 2: AWS SSM Session Manager**
+```bash
+# Requires AWS CLI and Session Manager plugin installed
+aws ssm start-session --target i-0db574a38acd30088
+```
+
+> **Note:** SSM requires the SSM Agent to be running on the instance and proper IAM role configuration. If SSM shows "TargetNotConnected", use SSH instead.
+
+### Setting Up SSM Access
+
+The SSM Agent is installed but requires an IAM role. To enable SSM:
+
+1. **Create IAM Role** (requires IAM admin permissions):
+   ```bash
+   # Create trust policy
+   cat > trust-policy.json << 'EOF'
+   {
+     "Version": "2012-10-17",
+     "Statement": [{
+       "Effect": "Allow",
+       "Principal": {"Service": "ec2.amazonaws.com"},
+       "Action": "sts:AssumeRole"
+     }]
+   }
+   EOF
+
+   # Create role and attach SSM policy
+   aws iam create-role --role-name EC2-SSM-Role \
+     --assume-role-policy-document file://trust-policy.json
+   aws iam attach-role-policy --role-name EC2-SSM-Role \
+     --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+   # Create instance profile and add role
+   aws iam create-instance-profile --instance-profile-name EC2-SSM-Profile
+   aws iam add-role-to-instance-profile \
+     --instance-profile-name EC2-SSM-Profile --role-name EC2-SSM-Role
+   ```
+
+2. **Attach to EC2 Instance**:
+   ```bash
+   aws ec2 associate-iam-instance-profile \
+     --instance-id i-0db574a38acd30088 \
+     --iam-instance-profile Name=EC2-SSM-Profile
+   ```
+
+3. **Restart SSM Agent** (via SSH):
+   ```bash
+   ssh -i AWSCelestialKeyPair.pem ec2-user@54.242.9.15 \
+     "sudo systemctl restart amazon-ssm-agent"
+   ```
+
+4. **Connect via SSM**:
+   ```bash
+   aws ssm start-session --target i-0db574a38acd30088
+   ```
+
+### S3 Storage
+
+**Bucket:** `instapost--use1-az4--x-s3` (S3 Express One Zone)
+**Mount Point:** `/mnt/s3`
+
+The bucket auto-mounts on boot via systemd:
+```bash
+# Check mount status
+sudo systemctl status mount-s3.service
+
+# Manual mount/unmount
+sudo systemctl start mount-s3.service
+sudo systemctl stop mount-s3.service
+
+# View mounted files
+ls -la /mnt/s3
+```
+
+### Angie Web Server + Cloudflare Tunnel
+
+Images are served via Angie web server through a Cloudflare tunnel.
+
+**Root:** `/mnt/s3/images`
+
+```bash
+# Angie status
+sudo systemctl status angie
+
+# Cloudflare tunnel status
+sudo systemctl status cloudflared
+
+# Config locations
+/etc/angie/http.d/instapost.conf
+/etc/systemd/system/cloudflared.service
+```
+
+Images placed in `/mnt/s3/images/` are served via the Cloudflare tunnel domain.
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
