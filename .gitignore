@@ -51,3 +51,6 @@ scheduler copy.py
 # AWS
 *.pem
 *.pkg
+
+# UI Demo (Remotion)
+ui-demo/

@@ -1,0 +1,17 @@
+# Build artifacts
+dist/
+build/
+DerivedData/
+
+# Xcode
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# macOS
+.DS_Store
