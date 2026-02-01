@@ -1,559 +1,356 @@
-"""Command-line interface for instapost."""
+"""Command-line interface for instapost - remote VM operations."""
 
+import json
 import os
 import sys
-import subprocess
-import signal
-import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import click
 
-from instapost.config import load_settings
-from instapost.clients.dropbox import DropboxClient
-from instapost.clients.instagram import InstagramClient
-from instapost.utils import PROJECT_ROOT
-from instapost.schedule_utils import remove_from_schedule, update_schedule_entry, ScheduleValidationError
 from instapost.version import __version__, __build__
+from instapost import remote
 
 
 @click.group()
-@click.option(
-    "--env-file",
-    "-e",
-    type=click.Path(exists=True, file_okay=True, dir_okay=False, readable=True),
-    help="Path to .env file with API credentials.",
-)
-@click.pass_context
-def cli(ctx: click.Context, env_file: Optional[str] = None):
-    """Post images to Instagram using Facebook Graph API and Dropbox."""
-    try:
-        # Load settings from .env file
-        settings = load_settings(env_file)
-        
-        # Initialize clients
-        dropbox_client = DropboxClient(settings.dropbox)
-        instagram_client = InstagramClient(settings.instagram)
-        
-        # Store clients in context
-        ctx.obj = {
-            "settings": settings,
-            "dropbox_client": dropbox_client,
-            "instagram_client": instagram_client,
-        }
-    except Exception as e:
-        click.echo(f"Error initializing clients: {e}", err=True)
-        sys.exit(1)
+@click.version_option(version=f"{__version__} (build {__build__})")
+def cli():
+    """InstaPost - Instagram automation via remote VM."""
+    pass
 
 
-@cli.command()
-@click.argument("image_path", type=click.Path(exists=True, file_okay=True, dir_okay=False, readable=True))
-@click.option("--caption", "-c", required=True, help="Caption for the Instagram post.")
-@click.option("--location-id", "-l", help="Instagram location ID (optional).")
-@click.pass_context
-def post(ctx: click.Context, image_path: str, caption: str, location_id: Optional[str] = None):
-    """Upload image to Dropbox and post it to Instagram.
-    
-    IMAGE_PATH is the path to the image file to upload.
-    """
-    dropbox_client = ctx.obj["dropbox_client"]
-    instagram_client = ctx.obj["instagram_client"]
-    
-    try:
-        # Upload image to Dropbox and get shared link
-        click.echo("Uploading image to Dropbox...")
-        image_url = dropbox_client.upload_and_get_link(image_path)
-        click.echo(f"Image uploaded: {image_url}")
-        
-        # Post image to Instagram
-        click.echo("Posting image to Instagram...")
-        response = instagram_client.post_image(image_url, caption, location_id)
-        click.echo(f"Image posted to Instagram. Post ID: {response.get('id')}")
-    except Exception as e:
-        click.echo(f"Error posting image: {e}", err=True)
-        sys.exit(1)
-
-
-@cli.command()
-@click.pass_context
-def info(ctx: click.Context):
-    """Get information about the Instagram business account."""
-    instagram_client = ctx.obj["instagram_client"]
-    
-    try:
-        # Get account information
-        info = instagram_client.get_account_info()
-        
-        # Display account information
-        click.echo("Instagram Account Information:")
-        click.echo(f"Name: {info.get('name')}")
-        click.echo(f"Username: {info.get('username')}")
-        click.echo(f"Followers: {info.get('followers_count')}")
-        click.echo(f"Media Count: {info.get('media_count')}")
-    except Exception as e:
-        click.echo(f"Error getting account information: {e}", err=True)
-        sys.exit(1)
-
-
-@cli.command()
-@click.option("--limit", "-n", type=int, default=5, help="Number of recent media items to display.")
-@click.pass_context
-def media(ctx: click.Context, limit: int):
-    """Get recent media from the Instagram business account."""
-    instagram_client = ctx.obj["instagram_client"]
-    
-    try:
-        # Get recent media
-        media = instagram_client.get_media(limit)
-        
-        # Display recent media
-        click.echo(f"Recent Instagram Media (up to {limit} items):")
-        for item in media.get("data", []):
-            click.echo(f"ID: {item.get('id')}")
-            click.echo(f"Type: {item.get('media_type')}")
-            click.echo(f"Caption: {item.get('caption', 'No caption')[:50]}...")
-            click.echo(f"URL: {item.get('permalink')}")
-            click.echo("---")
-    except Exception as e:
-        click.echo(f"Error getting recent media: {e}", err=True)
-        sys.exit(1)
-
-
-@cli.command()
-@click.pass_context
-def token_info(ctx: click.Context):
-    """Check Facebook token validity, expiration, and properties."""
-    instagram_client = ctx.obj["instagram_client"]
-    
-    try:
-        # Get token information
-        token_info = instagram_client.get_token_info()
-        
-        # Display token information
-        click.echo("Facebook Access Token Information:")
-        click.echo(f"Valid: {token_info.get('is_valid', False)}")
-        
-        # Display expiration date if available
-        expires_at = token_info.get('expires_at')
-        if expires_at:
-            click.echo(f"Expires At: {expires_at}")
-        else:
-            click.echo("Expires At: Never (long-lived token)")
-        
-        # Display scopes
-        scopes = token_info.get('scopes', [])
-        if scopes:
-            click.echo("Scopes:")
-            for scope in scopes:
-                click.echo(f"  - {scope}")
-        else:
-            click.echo("Scopes: None or not available")
-        
-        # Display user ID and app ID
-        click.echo(f"User ID: {token_info.get('user_id', 'Not available')}")
-        click.echo(f"App ID: {token_info.get('app_id', 'Not available')}")
-        click.echo(f"Token Type: {token_info.get('token_type', 'Not available')}")
-    except Exception as e:
-        click.echo(f"Error checking token information: {e}", err=True)
-        sys.exit(1)
-
-
-@cli.command()
-def dropbox():
-    """Set up Dropbox authentication and get refresh token."""
-    try:
-        # Generate authentication flow
-        auth_url, auth_flow = DropboxClient.generate_auth_flow()
-
-        # Display instructions
-        click.echo("1. Go to the following URL in your browser:")
-        click.echo(auth_url)
-        click.echo("2. Click 'Allow' (you might need to log in first).")
-        click.echo("3. Copy the authorization code.")
-
-        # Get authorization code
-        auth_code = click.prompt("Enter the authorization code")
-
-        # Complete authentication flow
-        refresh_token = DropboxClient.complete_auth_flow(auth_flow, auth_code)
-
-        # Display refresh token
-        click.echo("\nDropbox authentication successful!")
-        click.echo(f"Refresh Token: {refresh_token}")
-        click.echo("\nAdd this token to your .env file as DROPBOX_REFRESH_TOKEN.")
-    except Exception as e:
-        click.echo(f"Error setting up Dropbox authentication: {e}", err=True)
-        sys.exit(1)
-
-
-def _get_daemon_pids():
-    """Get PIDs of running InstaPost daemons."""
-    try:
-        result = subprocess.run(
-            ["pgrep", "-f", "instapost.daemons"],
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return [int(pid) for pid in result.stdout.strip().split('\n')]
-        return []
-    except Exception:
-        return []
-
-
-def _get_daemon_info(pid):
-    """Get daemon name from PID."""
-    try:
-        result = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "command="],
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0:
-            cmd = result.stdout.strip()
-            if "watcher" in cmd:
-                return "watcher"
-            elif "scheduler" in cmd:
-                return "scheduler"
-            elif "mover" in cmd:
-                return "mover"
-        return "unknown"
-    except Exception:
-        return "unknown"
-
-
-def _get_process_runtime(pid):
-    """Get process runtime."""
-    try:
-        result = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "etime="],
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-        return "?"
-    except Exception:
-        return "?"
-
-
-@cli.command()
-def start():
-    """Start all InstaPost daemons (watcher, scheduler, mover)."""
-    click.echo("Starting InstaPost daemons...")
-    click.echo("=" * 40)
-
-    # Check if any daemons are already running
-    pids = _get_daemon_pids()
-    if pids:
-        click.echo("Warning: Some InstaPost daemons are already running")
-        click.echo("Run 'instapost stop' first to stop them")
-        sys.exit(1)
-
-    # Ensure directories exist
-    os.makedirs(PROJECT_ROOT / "logs", exist_ok=True)
-    os.makedirs(PROJECT_ROOT / "images", exist_ok=True)
-    os.makedirs(PROJECT_ROOT / "processed", exist_ok=True)
-
-    # Start watcher
-    click.echo("Starting watcher daemon...")
-    with open(PROJECT_ROOT / "logs" / "watcher.log", "a") as log:
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "instapost.daemons.watcher", "./images"],
-            stdout=log,
-            stderr=log,
-            cwd=PROJECT_ROOT,
-            start_new_session=True
-        )
-    click.echo(f"  Watcher started (PID: {proc.pid})")
-    time.sleep(1)
-
-    # Start scheduler
-    click.echo("Starting scheduler daemon...")
-    with open(PROJECT_ROOT / "logs" / "scheduler.log", "a") as log:
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "instapost.daemons.scheduler"],
-            stdout=log,
-            stderr=log,
-            cwd=PROJECT_ROOT,
-            start_new_session=True
-        )
-    click.echo(f"  Scheduler started (PID: {proc.pid})")
-    time.sleep(1)
-
-    # Start mover
-    click.echo("Starting mover daemon...")
-    with open(PROJECT_ROOT / "logs" / "mover.log", "a") as log:
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "instapost.daemons.mover", "./images", "./processed"],
-            stdout=log,
-            stderr=log,
-            cwd=PROJECT_ROOT,
-            start_new_session=True
-        )
-    click.echo(f"  Mover started (PID: {proc.pid})")
-
-    click.echo()
-    click.echo("=" * 40)
-    click.echo("All daemons started successfully!")
-    click.echo()
-    click.echo("Monitor logs with:")
-    click.echo("  tail -f logs/watcher.log")
-    click.echo("  tail -f logs/scheduler.log")
-    click.echo("  tail -f logs/mover.log")
-    click.echo()
-    click.echo("Check status with: instapost status")
-    click.echo("Stop daemons with: instapost stop")
-
-
-@cli.command()
-def stop():
-    """Stop all InstaPost daemons."""
-    click.echo("Stopping InstaPost daemons...")
-    click.echo("=" * 40)
-
-    # Get all daemon PIDs
-    pids = _get_daemon_pids()
-
-    if not pids:
-        click.echo("No InstaPost daemons are currently running")
-        return
-
-    click.echo(f"Found {len(pids)} daemon(s) running")
-    click.echo()
-
-    # Stop each daemon
-    for pid in pids:
-        daemon_name = _get_daemon_info(pid)
-        click.echo(f"Stopping {daemon_name} (PID: {pid})...")
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            click.echo(f"  Already stopped")
-        except Exception as e:
-            click.echo(f"  Error: {e}")
-
-    # Wait for graceful shutdown
-    time.sleep(2)
-
-    # Check if any processes are still running
-    remaining = _get_daemon_pids()
-
-    if remaining:
-        click.echo()
-        click.echo("Some processes didn't stop gracefully. Force killing...")
-        for pid in remaining:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except Exception:
-                pass
-        time.sleep(1)
-
-    # Final check
-    final_check = _get_daemon_pids()
-
-    if final_check:
-        click.echo()
-        click.echo("Error: Some daemons are still running")
-        click.echo(f"PIDs: {final_check}")
-        sys.exit(1)
-
-    click.echo()
-    click.echo("=" * 40)
-    click.echo("All daemons stopped successfully!")
-
+# =============================================================================
+# Status & Monitoring Commands
+# =============================================================================
 
 @cli.command()
 def status():
-    """Check status of InstaPost daemons."""
-    import json
-
-    click.echo("InstaPost Daemon Status")
-    click.echo("=" * 40)
+    """Check status of remote VM and cron jobs."""
+    click.echo("InstaPost Status")
+    click.echo("=" * 50)
     click.echo()
 
-    # Get all daemon PIDs
-    pids = _get_daemon_pids()
-
-    # Track which daemons are running
-    running_daemons = {}
-    for pid in pids:
-        daemon_name = _get_daemon_info(pid)
-        runtime = _get_process_runtime(pid)
-        running_daemons[daemon_name] = (pid, runtime)
-
-    # Check each expected daemon
-    for daemon_name in ["watcher", "scheduler", "mover"]:
-        if daemon_name in running_daemons:
-            pid, runtime = running_daemons[daemon_name]
-            click.echo(f"✅ {daemon_name.capitalize():10s}: Running (PID: {pid}, Runtime: {runtime})")
-        else:
-            click.echo(f"❌ {daemon_name.capitalize():10s}: Not running")
-
-    click.echo()
-    click.echo("=" * 40)
-
-    # Show version info
-    click.echo(f"Version: v{__version__} (build {__build__})")
-
-    # Show schedule info if files exist
-    schedule_file = PROJECT_ROOT / "schedule.json"
-    processed_file = PROJECT_ROOT / "processed.json"
-
-    if schedule_file.exists():
-        try:
-            with open(schedule_file) as f:
-                scheduled = len(json.load(f))
-            click.echo(f"Scheduled posts: {scheduled}")
-        except Exception:
-            pass
-
-    if processed_file.exists():
-        try:
-            with open(processed_file) as f:
-                processed = len(json.load(f))
-            click.echo(f"Processed posts: {processed}")
-        except Exception:
-            pass
-
-    # Show TEST_MODE status
-    env_file = PROJECT_ROOT / ".env"
-    if env_file.exists():
-        try:
-            with open(env_file) as f:
-                for line in f:
-                    if line.startswith("TEST_MODE="):
-                        test_mode = line.split("=", 1)[1].strip()
-                        if test_mode.lower() in ["true", "1", "yes"]:
-                            click.echo("Mode: TEST MODE (immediate posting)")
-                        else:
-                            click.echo("Mode: PRODUCTION (scheduled posting)")
-                        break
-        except Exception:
-            pass
-
+    config = remote.get_vm_config()
+    click.echo(f"VM Host: {config['host']}")
     click.echo()
 
-    # Overall status
-    all_running = all(d in running_daemons for d in ["watcher", "scheduler", "mover"])
-    none_running = not any(d in running_daemons for d in ["watcher", "scheduler", "mover"])
+    # Check SSH connectivity
+    success, output = remote.ssh("echo 'connected'", timeout=5)
+    if not success:
+        click.echo("❌ Cannot connect to VM")
+        click.echo(f"   {output}")
+        sys.exit(1)
+    click.echo("✅ VM: Connected")
 
-    if all_running:
-        click.echo("Status: All systems operational ✅")
-    elif none_running:
-        click.echo("Status: All systems stopped ❌")
-        click.echo("Run 'instapost start' to start daemons")
+    # Check cron jobs
+    success, crontab = remote.check_cron()
+    if success and 'instapost' in crontab:
+        cron_count = crontab.count('instapost.cron')
+        click.echo(f"✅ Cron: {cron_count} job(s) installed")
     else:
-        click.echo("Status: Partial failure ⚠️")
-        click.echo("Some daemons are not running. Run 'instapost restart' to restart all.")
+        click.echo("❌ Cron: No jobs installed")
+
+    # Check schedule
+    success, schedule_json = remote.read_json("schedule.json")
+    if success:
+        try:
+            scheduled = json.loads(schedule_json)
+            click.echo(f"📅 Scheduled: {len(scheduled)} post(s)")
+        except json.JSONDecodeError:
+            click.echo("⚠️  Schedule: Invalid JSON")
+
+    # Check processed
+    success, processed_json = remote.read_json("processed.json")
+    if success:
+        try:
+            processed = json.loads(processed_json)
+            click.echo(f"✅ Posted: {len(processed)} post(s)")
+        except json.JSONDecodeError:
+            pass
+
+    # Check images directory
+    success, images = remote.list_images()
+    if success and images:
+        count = len([f for f in images.split('\n') if f.strip()])
+        click.echo(f"🖼️  Images: {count} file(s) pending")
+    else:
+        click.echo("🖼️  Images: 0 files pending")
+
+    click.echo()
+    click.echo(f"Version: v{__version__} (build {__build__})")
 
 
 @cli.command()
-def restart():
-    """Restart all InstaPost daemons."""
-    click.echo("Restarting InstaPost daemons...")
+def health():
+    """Comprehensive health check of the remote system."""
+    click.echo("InstaPost Health Check")
+    click.echo("=" * 50)
     click.echo()
 
-    # Stop daemons
-    ctx = click.get_current_context()
-    ctx.invoke(stop)
+    issues = []
+    warnings = []
+
+    # SSH connectivity
+    success, _ = remote.ssh("true", timeout=5)
+    if success:
+        click.echo("✅ SSH connectivity: OK")
+    else:
+        click.echo("❌ SSH connectivity: Failed")
+        issues.append("Cannot connect to VM")
+        click.echo()
+        click.echo(f"Status: Unhealthy ({len(issues)} issues)")
+        sys.exit(1)
+
+    # Cron daemon
+    success, output = remote.ssh("systemctl is-active crond")
+    if success and 'active' in output:
+        click.echo("✅ Cron daemon: Running")
+    else:
+        click.echo("❌ Cron daemon: Not running")
+        issues.append("Cron daemon not running")
+
+    # Cron jobs installed
+    success, crontab = remote.check_cron()
+    if success and 'instapost.cron.watcher_cron' in crontab:
+        click.echo("✅ Watcher cron: Installed")
+    else:
+        click.echo("❌ Watcher cron: Not installed")
+        issues.append("Watcher cron not installed")
+
+    if success and 'instapost.cron.scheduler_cron' in crontab:
+        click.echo("✅ Scheduler cron: Installed")
+    else:
+        click.echo("❌ Scheduler cron: Not installed")
+        issues.append("Scheduler cron not installed")
+
+    # Disk space
+    success, df_output = remote.disk_usage()
+    if success:
+        lines = df_output.strip().split('\n')
+        if len(lines) > 1:
+            parts = lines[1].split()
+            if len(parts) >= 5:
+                use_percent = parts[4].rstrip('%')
+                try:
+                    if int(use_percent) > 90:
+                        click.echo(f"❌ Disk usage: {use_percent}%")
+                        issues.append(f"Disk usage critical: {use_percent}%")
+                    elif int(use_percent) > 80:
+                        click.echo(f"⚠️  Disk usage: {use_percent}%")
+                        warnings.append(f"Disk usage high: {use_percent}%")
+                    else:
+                        click.echo(f"✅ Disk usage: {use_percent}%")
+                except ValueError:
+                    pass
+
+    # Web server (Angie)
+    success, output = remote.ssh("systemctl is-active angie")
+    if success and 'active' in output:
+        click.echo("✅ Web server (Angie): Running")
+    else:
+        click.echo("❌ Web server (Angie): Not running")
+        issues.append("Angie web server not running")
+
+    # Cloudflare tunnel
+    success, output = remote.ssh("systemctl is-active cloudflared")
+    if success and 'active' in output:
+        click.echo("✅ Cloudflare tunnel: Running")
+    else:
+        click.echo("⚠️  Cloudflare tunnel: Not running (may be managed differently)")
+        warnings.append("Cloudflare tunnel status unknown")
+
+    # S3 mount (check /mnt/s3 which is the actual mount point)
+    success, output = remote.ssh("mountpoint -q /mnt/s3 && echo 'mounted' || (ls /mnt/s3 >/dev/null 2>&1 && echo 'accessible')")
+    if success and ('mounted' in output or 'accessible' in output):
+        click.echo("✅ S3 mount: OK")
+    else:
+        click.echo("❌ S3 mount: Not mounted")
+        issues.append("S3 bucket not mounted")
 
     click.echo()
-    time.sleep(1)
+    click.echo("=" * 50)
 
-    # Start daemons
-    ctx.invoke(start)
+    if issues:
+        click.echo(f"Status: Unhealthy ({len(issues)} issues)")
+        for issue in issues:
+            click.echo(f"  ❌ {issue}")
+        sys.exit(1)
+    elif warnings:
+        click.echo(f"Status: Degraded ({len(warnings)} warnings)")
+        for warning in warnings:
+            click.echo(f"  ⚠️  {warning}")
+    else:
+        click.echo("Status: Healthy ✅")
 
+
+@cli.command()
+@click.option('--job', '-j', type=click.Choice(['watcher', 'scheduler', 'all']), default='all',
+              help='Which job logs to view')
+@click.option('--lines', '-n', type=int, default=50, help='Number of lines to show')
+@click.option('--follow', '-f', is_flag=True, help='Follow log output')
+def logs(job, lines, follow):
+    """View cron job logs from the remote VM."""
+    log_files = {
+        'watcher': 'watcher_cron.log',
+        'scheduler': 'scheduler_cron.log',
+    }
+
+    jobs = list(log_files.keys()) if job == 'all' else [job]
+
+    if follow:
+        config = remote.get_vm_config()
+        log_paths = ' '.join(f"{config['instapost_dir']}/logs/{log_files[j]}" for j in jobs)
+        cmd = f"tail -f {log_paths}"
+        try:
+            import subprocess
+            subprocess.run(['ssh', config['host'], cmd])
+        except KeyboardInterrupt:
+            click.echo("\nStopped following logs")
+        return
+
+    for j in jobs:
+        if len(jobs) > 1:
+            click.echo(f"{'=' * 50}")
+            click.echo(f"{j.upper()} LOG")
+            click.echo(f"{'=' * 50}")
+
+        success, output = remote.tail_log(log_files[j], lines)
+        if success:
+            click.echo(output)
+        else:
+            click.echo(f"Error reading log: {output}")
+
+        if len(jobs) > 1:
+            click.echo()
+
+
+# =============================================================================
+# Queue Management Commands
+# =============================================================================
 
 @cli.command()
 def queue():
-    """View scheduled posts in the queue."""
-    import json
-    from datetime import datetime
-
-    schedule_file = PROJECT_ROOT / "schedule.json"
-
-    if not schedule_file.exists():
-        click.echo("No schedule file found")
-        return
+    """View scheduled posts queue."""
+    success, schedule_json = remote.read_json("schedule.json")
+    if not success:
+        click.echo("Error reading schedule")
+        sys.exit(1)
 
     try:
-        with open(schedule_file) as f:
-            scheduled = json.load(f)
+        scheduled = json.loads(schedule_json)
+    except json.JSONDecodeError:
+        click.echo("Invalid schedule file")
+        sys.exit(1)
 
-        if not scheduled:
-            click.echo("No posts currently scheduled")
-            return
+    if not scheduled:
+        click.echo("No posts scheduled")
+        return
 
-        click.echo("Scheduled Posts Queue")
-        click.echo("=" * 60)
+    click.echo("Scheduled Posts Queue")
+    click.echo("=" * 60)
+    click.echo()
+
+    now = datetime.now()
+    for i, entry in enumerate(scheduled, 1):
+        filename = entry.get('filename', 'Unknown')
+        scheduled_time = entry.get('time', 'Unknown')
+
+        try:
+            dt = datetime.fromisoformat(scheduled_time.replace('Z', '+00:00'))
+            time_str = dt.strftime('%a %b %d, %Y at %H:%M')
+
+            # Calculate countdown
+            time_diff = dt.replace(tzinfo=None) - now
+            if time_diff.total_seconds() > 0:
+                days = time_diff.days
+                hours, remainder = divmod(time_diff.seconds, 3600)
+                minutes, _ = divmod(remainder, 60)
+                if days > 0:
+                    countdown = f"in {days}d {hours}h"
+                elif hours > 0:
+                    countdown = f"in {hours}h {minutes}m"
+                else:
+                    countdown = f"in {minutes}m"
+            else:
+                countdown = "overdue"
+            time_str += f" ({countdown})"
+        except Exception:
+            time_str = scheduled_time
+
+        click.echo(f"{i}. {filename}")
+        click.echo(f"   {time_str}")
         click.echo()
 
-        now = datetime.now()
-        for i, entry in enumerate(scheduled, 1):
-            filename = entry.get('filename', 'Unknown')
-            scheduled_time = entry.get('time', 'Unknown')
 
-            # Parse and format time
-            try:
-                dt = datetime.fromisoformat(scheduled_time)
-                time_str = dt.strftime('%a %b %d, %Y at %H:%M:%S %Z')
-
-                # Calculate time until post
-                time_diff = dt.replace(tzinfo=None) - now
-                if time_diff.total_seconds() > 0:
-                    days = time_diff.days
-                    hours, remainder = divmod(time_diff.seconds, 3600)
-                    minutes, _ = divmod(remainder, 60)
-
-                    if days > 0:
-                        countdown = f"in {days}d {hours}h {minutes}m"
-                    elif hours > 0:
-                        countdown = f"in {hours}h {minutes}m"
-                    else:
-                        countdown = f"in {minutes}m"
-                else:
-                    countdown = "overdue"
-
-                time_str += f" ({countdown})"
-            except Exception:
-                time_str = scheduled_time
-
-            click.echo(f"{i}. {filename}")
-            click.echo(f"   Scheduled: {time_str}")
-            click.echo()
-
-    except Exception as e:
-        click.echo(f"Error reading schedule: {e}", err=True)
+@cli.command()
+@click.option('--limit', '-n', type=int, default=10, help='Number of posts to show')
+def history(limit):
+    """View post history."""
+    success, processed_json = remote.read_json("processed.json")
+    if not success:
+        click.echo("Error reading history")
         sys.exit(1)
+
+    try:
+        processed = json.loads(processed_json)
+    except json.JSONDecodeError:
+        click.echo("Invalid history file")
+        sys.exit(1)
+
+    if not processed:
+        click.echo("No posts in history")
+        return
+
+    click.echo(f"Post History (last {min(limit, len(processed))})")
+    click.echo("=" * 60)
+    click.echo()
+
+    for entry in list(reversed(processed))[:limit]:
+        filename = entry.get('filename', 'Unknown')
+        url = entry.get('url', 'No URL')
+        timestamp = entry.get('timestamp', '')
+
+        try:
+            dt = datetime.fromisoformat(timestamp)
+            time_str = dt.strftime('%a %b %d, %Y at %H:%M')
+        except Exception:
+            time_str = timestamp
+
+        click.echo(f"📷 {filename}")
+        click.echo(f"   Posted: {time_str}")
+        click.echo(f"   URL: {url}")
+        click.echo()
 
 
 @cli.command()
 @click.argument('filename')
 def cancel(filename):
-    """Cancel a scheduled post and remove it from the queue.
-
-    FILENAME is the name of the image file to cancel.
-    """
-    import json
+    """Cancel a scheduled post."""
+    success, schedule_json = remote.read_json("schedule.json")
+    if not success:
+        click.echo("Error reading schedule")
+        sys.exit(1)
 
     try:
-        remove_from_schedule(filename)
-        click.echo(f"✅ Cancelled: {filename}")
-
-        # Show remaining queue
-        schedule_file = PROJECT_ROOT / "schedule.json"
-        if schedule_file.exists():
-            with open(schedule_file) as f:
-                remaining = len(json.load(f))
-            click.echo(f"Remaining posts in queue: {remaining}")
-
-    except ScheduleValidationError as e:
-        click.echo(f"Error: {e}", err=True)
+        scheduled = json.loads(schedule_json)
+    except json.JSONDecodeError:
+        click.echo("Invalid schedule file")
         sys.exit(1)
-    except Exception as e:
-        click.echo(f"Error canceling post: {e}", err=True)
+
+    original_count = len(scheduled)
+    scheduled = [e for e in scheduled if e.get('filename') != filename]
+
+    if len(scheduled) == original_count:
+        click.echo(f"Not found: {filename}")
+        sys.exit(1)
+
+    success, _ = remote.write_json("schedule.json", json.dumps(scheduled, indent=2))
+    if success:
+        click.echo(f"✅ Cancelled: {filename}")
+        click.echo(f"   Remaining: {len(scheduled)} post(s)")
+    else:
+        click.echo("Error updating schedule")
         sys.exit(1)
 
 
@@ -563,313 +360,266 @@ def cancel(filename):
 def reschedule(filename, new_time):
     """Reschedule a post to a different time.
 
-    FILENAME is the name of the image file to reschedule.
-    NEW_TIME is the new time in ISO format (YYYY-MM-DDTHH:MM:SS).
-
-    Example: instapost reschedule image.jpg 2025-12-30T10:00:00
+    NEW_TIME format: YYYY-MM-DDTHH:MM:SS
     """
-    import json
-    from datetime import datetime
-
-    # Validate new time format
+    # Validate time format
     try:
         datetime.fromisoformat(new_time)
     except ValueError:
-        click.echo(f"Error: Invalid time format. Use ISO format: YYYY-MM-DDTHH:MM:SS", err=True)
+        click.echo("Invalid time format. Use: YYYY-MM-DDTHH:MM:SS")
+        sys.exit(1)
+
+    success, schedule_json = remote.read_json("schedule.json")
+    if not success:
+        click.echo("Error reading schedule")
         sys.exit(1)
 
     try:
-        # Get old time before update
-        schedule_file = PROJECT_ROOT / "schedule.json"
-        old_time = None
-        if schedule_file.exists():
-            with open(schedule_file) as f:
-                for entry in json.load(f):
-                    if entry.get('filename') == filename:
-                        old_time = entry.get('time')
-                        break
+        scheduled = json.loads(schedule_json)
+    except json.JSONDecodeError:
+        click.echo("Invalid schedule file")
+        sys.exit(1)
 
-        # Update with validation
-        update_schedule_entry(filename, new_time=new_time)
+    found = False
+    old_time = None
+    for entry in scheduled:
+        if entry.get('filename') == filename:
+            old_time = entry.get('time')
+            entry['time'] = new_time
+            found = True
+            break
 
+    if not found:
+        click.echo(f"Not found: {filename}")
+        sys.exit(1)
+
+    success, _ = remote.write_json("schedule.json", json.dumps(scheduled, indent=2))
+    if success:
         click.echo(f"✅ Rescheduled: {filename}")
         if old_time:
-            click.echo(f"   Old time: {old_time}")
-        click.echo(f"   New time: {new_time}")
-
-    except ScheduleValidationError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-    except Exception as e:
-        click.echo(f"Error rescheduling post: {e}", err=True)
+            click.echo(f"   Old: {old_time}")
+        click.echo(f"   New: {new_time}")
+    else:
+        click.echo("Error updating schedule")
         sys.exit(1)
 
+
+# =============================================================================
+# Image Commands
+# =============================================================================
 
 @cli.command()
-@click.option('--daemon', '-d', type=click.Choice(['watcher', 'scheduler', 'mover', 'all']), default='all',
-              help='Which daemon logs to view (default: all)')
-@click.option('--lines', '-n', type=int, default=50, help='Number of lines to show (default: 50)')
-@click.option('--follow', '-f', is_flag=True, help='Follow log output (like tail -f)')
-def logs(daemon, lines, follow):
-    """View daemon logs.
+def images():
+    """List pending images on the remote VM."""
+    success, output = remote.list_images()
+    if not success:
+        click.echo("Error listing images")
+        sys.exit(1)
 
-    Examples:
-        instapost logs                    # Show last 50 lines of all logs
-        instapost logs -d scheduler -n 100  # Show last 100 lines of scheduler
-        instapost logs -f                  # Follow all logs in real-time
-    """
-    log_dir = PROJECT_ROOT / "logs"
+    files = [f for f in output.split('\n') if f.strip()]
 
-    if not log_dir.exists():
-        click.echo("No logs directory found")
+    if not files:
+        click.echo("No pending images")
         return
 
-    daemon_logs = {
-        'watcher': log_dir / 'watcher.log',
-        'scheduler': log_dir / 'scheduler.log',
-        'mover': log_dir / 'mover.log'
-    }
-
-    # Determine which logs to show
-    if daemon == 'all':
-        logs_to_show = daemon_logs
-    else:
-        logs_to_show = {daemon: daemon_logs[daemon]}
-
-    if follow:
-        # Use tail -f for following
-        log_files = [str(log) for log in logs_to_show.values() if log.exists()]
-        if not log_files:
-            click.echo("No log files found")
-            return
-
-        try:
-            subprocess.run(['tail', '-f'] + log_files)
-        except KeyboardInterrupt:
-            click.echo("\nStopped following logs")
-    else:
-        # Show last N lines
-        for daemon_name, log_file in logs_to_show.items():
-            if not log_file.exists():
-                click.echo(f"No log file for {daemon_name}")
-                continue
-
-            click.echo(f"{'=' * 60}")
-            click.echo(f"{daemon_name.upper()} LOG (last {lines} lines)")
-            click.echo(f"{'=' * 60}")
-
-            try:
-                result = subprocess.run(
-                    ['tail', '-n', str(lines), str(log_file)],
-                    capture_output=True,
-                    text=True
-                )
-                click.echo(result.stdout)
-            except Exception as e:
-                click.echo(f"Error reading log: {e}", err=True)
-
-            if len(logs_to_show) > 1:
-                click.echo()
+    click.echo(f"Pending Images ({len(files)})")
+    click.echo("=" * 40)
+    for f in files:
+        click.echo(f"  {f}")
 
 
 @cli.command()
-@click.option('--limit', '-n', type=int, default=10, help='Number of posts to show (default: 10)')
-def history(limit):
-    """View post history with URLs and timestamps."""
-    import json
-    from datetime import datetime
+@click.argument('image_path', type=click.Path(exists=True))
+@click.option('--caption', '-c', help='Caption text or path to .txt file')
+def upload(image_path, caption):
+    """Upload an image to the remote VM for scheduling."""
+    click.echo(f"Uploading {image_path}...")
 
-    processed_file = PROJECT_ROOT / "processed.json"
-
-    if not processed_file.exists():
-        click.echo("No processed posts found")
-        return
-
-    try:
-        with open(processed_file) as f:
-            processed = json.load(f)
-
-        if not processed:
-            click.echo("No posts have been processed yet")
-            return
-
-        # Show most recent first
-        processed = list(reversed(processed[-limit:]))
-
-        click.echo(f"Post History (last {min(limit, len(processed))} posts)")
-        click.echo("=" * 60)
-        click.echo()
-
-        for i, entry in enumerate(processed, 1):
-            filename = entry.get('filename', 'Unknown')
-            url = entry.get('url', 'No URL')
-            timestamp = entry.get('timestamp', '')
-
-            # Format timestamp
-            try:
-                dt = datetime.fromisoformat(timestamp)
-                time_str = dt.strftime('%a %b %d, %Y at %H:%M:%S')
-            except Exception:
-                time_str = timestamp
-
-            click.echo(f"{i}. {filename}")
-            click.echo(f"   Posted: {time_str}")
-            click.echo(f"   URL: {url}")
-            click.echo()
-
-    except Exception as e:
-        click.echo(f"Error reading history: {e}", err=True)
+    success, remote_path = remote.upload_image(image_path)
+    if not success:
+        click.echo(f"Error uploading: {remote_path}")
         sys.exit(1)
 
+    click.echo(f"✅ Uploaded to: {remote_path}")
+
+    # Upload caption if provided
+    if caption:
+        if os.path.isfile(caption):
+            with open(caption) as f:
+                caption_text = f.read()
+        else:
+            caption_text = caption
+
+        # Upload caption as .txt file alongside image
+        config = remote.get_vm_config()
+        base = os.path.splitext(os.path.basename(image_path))[0]
+        caption_path = f"{config['images_dir']}/{base}.txt"
+
+        escaped = caption_text.replace("'", "'\"'\"'")
+        success, _ = remote.ssh(f"echo '{escaped}' > {caption_path}")
+        if success:
+            click.echo(f"✅ Caption uploaded")
+        else:
+            click.echo("⚠️  Failed to upload caption")
+
+    click.echo()
+    click.echo("Run watcher to schedule: instapost run watcher")
+
+
+# =============================================================================
+# Manual Run Commands
+# =============================================================================
 
 @cli.command()
-def health():
-    """Check system health (daemons, schedule, disk space, connectivity)."""
-    import json
+@click.argument('job', type=click.Choice(['watcher', 'scheduler']))
+def run(job):
+    """Manually run a cron job on the remote VM."""
+    click.echo(f"Running {job}...")
 
-    click.echo("InstaPost Health Check")
-    click.echo("=" * 60)
-    click.echo()
+    module = f"{job}_cron"
+    success, output = remote.run_cron_module(module)
 
-    issues = []
-    warnings = []
+    if output:
+        click.echo(output)
 
-    # Check daemons
-    pids = _get_daemon_pids()
-    running_daemons = {_get_daemon_info(pid) for pid in pids}
-
-    for daemon_name in ["watcher", "scheduler", "mover"]:
-        if daemon_name in running_daemons:
-            click.echo(f"✅ {daemon_name.capitalize()} daemon: Running")
-        else:
-            click.echo(f"❌ {daemon_name.capitalize()} daemon: Not running")
-            issues.append(f"{daemon_name} daemon not running")
-
-    click.echo()
-
-    # Check schedule file
-    schedule_file = PROJECT_ROOT / "schedule.json"
-    if schedule_file.exists():
-        try:
-            with open(schedule_file) as f:
-                scheduled = json.load(f)
-            click.echo(f"✅ Schedule file: OK ({len(scheduled)} posts queued)")
-        except Exception as e:
-            click.echo(f"⚠️  Schedule file: Error reading - {e}")
-            warnings.append(f"Schedule file error: {e}")
+    if success:
+        click.echo(f"✅ {job.capitalize()} completed")
     else:
-        click.echo(f"⚠️  Schedule file: Not found")
-        warnings.append("Schedule file missing")
-
-    # Check directories
-    for dir_name, dir_path in [("images", PROJECT_ROOT / "images"),
-                                ("processed", PROJECT_ROOT / "processed"),
-                                ("logs", PROJECT_ROOT / "logs")]:
-        if dir_path.exists():
-            click.echo(f"✅ {dir_name.capitalize()} directory: Exists")
-        else:
-            click.echo(f"❌ {dir_name.capitalize()} directory: Missing")
-            issues.append(f"{dir_name} directory missing")
-
-    # Check disk space
-    try:
-        stat = os.statvfs(PROJECT_ROOT)
-        free_gb = (stat.f_bavail * stat.f_frsize) / (1024**3)
-        total_gb = (stat.f_blocks * stat.f_frsize) / (1024**3)
-        used_percent = ((total_gb - free_gb) / total_gb) * 100
-
-        if free_gb < 1:
-            click.echo(f"❌ Disk space: {free_gb:.2f} GB free ({used_percent:.1f}% used)")
-            issues.append(f"Low disk space: {free_gb:.2f} GB free")
-        elif free_gb < 5:
-            click.echo(f"⚠️  Disk space: {free_gb:.2f} GB free ({used_percent:.1f}% used)")
-            warnings.append(f"Low disk space: {free_gb:.2f} GB free")
-        else:
-            click.echo(f"✅ Disk space: {free_gb:.2f} GB free ({used_percent:.1f}% used)")
-    except Exception:
-        click.echo(f"⚠️  Disk space: Could not check")
-
-    click.echo()
-    click.echo("=" * 60)
-
-    # Summary
-    if not issues and not warnings:
-        click.echo("Status: Healthy ✅")
-        return 0
-    elif issues:
-        click.echo(f"Status: Unhealthy ({len(issues)} critical issues) ❌")
-        for issue in issues:
-            click.echo(f"  • {issue}")
-        return 1
-    else:
-        click.echo(f"Status: Degraded ({len(warnings)} warnings) ⚠️")
-        for warning in warnings:
-            click.echo(f"  • {warning}")
-        return 0
+        click.echo(f"❌ {job.capitalize()} failed")
+        sys.exit(1)
 
 
 @cli.command()
 @click.option('--apply', is_flag=True, help='Apply changes (default is dry-run)')
-@click.option('--limit', '-n', type=int, default=10, help='Number of changes to show (default: 10)')
-def rebalance(apply, limit):
-    """Rebalance schedule by filling gaps with posts from the end.
+def rebalance(apply):
+    """Rebalance schedule to fill gaps."""
+    config = remote.get_vm_config()
+    cmd = f"cd {config['instapost_dir']} && ~/.local/bin/uv run python -m instapost.rebalance"
+    if apply:
+        cmd += " --apply"
 
-    By default, runs in dry-run mode and shows what would be changed.
-    Use --apply to actually rebalance the schedule.
+    success, output = remote.ssh(cmd, timeout=60)
 
-    Examples:
-        instapost rebalance              # Show what would change
-        instapost rebalance --apply      # Actually rebalance
-        instapost rebalance -n 20        # Show first 20 changes
-    """
-    from instapost.rebalance import rebalance_schedule
+    if output:
+        click.echo(output)
 
-    try:
-        result = rebalance_schedule(dry_run=not apply)
-
-        if not result['success']:
-            click.echo(f"Error: {result.get('error', 'Unknown error')}", err=True)
-            sys.exit(1)
-
-        click.echo("Schedule Rebalancing")
-        click.echo("=" * 60)
-        click.echo()
-        click.echo(f"Gaps found: {result['gaps_found']}")
-        click.echo(f"Posts to move: {result['posts_moved']}")
-        click.echo()
-
-        if result['posts_moved'] == 0:
-            click.echo("✅ Schedule is already optimal - no gaps to fill")
-            return
-
-        click.echo(result.get('message', ''))
-        click.echo()
-
-        if result.get('changes'):
-            click.echo(f"Changes (showing first {min(limit, len(result['changes']))}):")
-            click.echo("-" * 60)
-            for change in result['changes'][:limit]:
-                click.echo(f"{change['filename']}")
-                click.echo(f"  {change['old_time']} → {change['new_time']}")
-                click.echo()
-
-            if len(result['changes']) > limit:
-                click.echo(f"... and {len(result['changes']) - limit} more changes")
-                click.echo()
-
-        if not apply:
-            click.echo("Note: This was a dry-run. Use --apply to make changes.")
-        else:
-            click.echo("✅ Schedule has been rebalanced!")
-
-    except Exception as e:
-        click.echo(f"Error rebalancing schedule: {e}", err=True)
+    if not success:
+        click.echo("Rebalance failed")
         sys.exit(1)
+
+
+# =============================================================================
+# Instagram API Commands (run on remote VM)
+# =============================================================================
+
+@cli.command()
+def token_info():
+    """Check Facebook token validity and expiration."""
+    config = remote.get_vm_config()
+    cmd = f"cd {config['instapost_dir']} && ~/.local/bin/uv run python -m instapost.api_commands token-info"
+    success, output = remote.ssh(cmd, timeout=30)
+    if output:
+        click.echo(output)
+    if not success:
+        sys.exit(1)
+
+
+@cli.command()
+def account():
+    """Get Instagram account information."""
+    config = remote.get_vm_config()
+    cmd = f"cd {config['instapost_dir']} && ~/.local/bin/uv run python -m instapost.api_commands account"
+    success, output = remote.ssh(cmd, timeout=30)
+    if output:
+        click.echo(output)
+    if not success:
+        sys.exit(1)
+
+
+@cli.command()
+@click.option('--limit', '-n', type=int, default=5, help='Number of posts to show')
+def media(limit):
+    """Get recent Instagram posts."""
+    config = remote.get_vm_config()
+    cmd = f"cd {config['instapost_dir']} && ~/.local/bin/uv run python -m instapost.api_commands media {limit}"
+    success, output = remote.ssh(cmd, timeout=30)
+    if output:
+        click.echo(output)
+    if not success:
+        sys.exit(1)
+
+
+# =============================================================================
+# Deployment Commands
+# =============================================================================
+
+@cli.command()
+@click.argument('env_file', type=click.Path(exists=True), required=False)
+def init(env_file):
+    """Initialize remote VM with .env file.
+
+    ENV_FILE is the path to the .env file to upload (default: .env.vm)
+    """
+    import subprocess
+
+    config = remote.get_vm_config()
+
+    # Find env file to upload
+    if not env_file:
+        for candidate in ['.env.vm', '.env.vm.example']:
+            path = Path(__file__).parent.parent / candidate
+            if path.exists():
+                env_file = str(path)
+                break
+
+    if not env_file:
+        click.echo("No .env file found. Create .env.vm with your credentials.")
+        click.echo("See .env.vm.example for template.")
+        sys.exit(1)
+
+    click.echo(f"Uploading {env_file} to VM...")
+
+    remote_path = f"{config['instapost_dir']}/.env"
+    result = subprocess.run(
+        ['scp', env_file, f"{config['host']}:{remote_path}"],
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode == 0:
+        click.echo(f"✅ Uploaded to {remote_path}")
+    else:
+        click.echo(f"❌ Failed: {result.stderr}")
+        sys.exit(1)
+
+
+@cli.command()
+def deploy():
+    """Deploy code to the remote VM."""
+    import subprocess
+
+    deploy_script = Path(__file__).parent.parent / "deploy.sh"
+    if not deploy_script.exists():
+        click.echo("deploy.sh not found")
+        sys.exit(1)
+
+    click.echo("Deploying to VM...")
+    result = subprocess.run([str(deploy_script)], cwd=deploy_script.parent)
+    sys.exit(result.returncode)
+
+
+@cli.command()
+def ssh():
+    """Open SSH session to the remote VM."""
+    import subprocess
+
+    config = remote.get_vm_config()
+    subprocess.run(['ssh', config['host']])
 
 
 def main():
     """Entry point for the CLI."""
-    cli(obj={})
+    cli()
 
 
 if __name__ == "__main__":

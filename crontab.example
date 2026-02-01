@@ -1,0 +1,23 @@
+# InstaPost Cron Jobs
+# Install with: crontab crontab.example
+# View with: crontab -l
+
+# Set environment
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# Change to your actual paths
+INSTAPOST_DIR=/home/ironsirens/instapost
+UV_PATH=/home/ironsirens/.local/bin/uv
+
+# Load environment variables
+# Note: Create a wrapper script or source .env in each command if needed
+
+# Watcher: Check for new images every 5 minutes
+*/5 * * * * flock -n /tmp/instapost-watcher.lock -c "cd $INSTAPOST_DIR && $UV_PATH run python -m instapost.cron.watcher_cron" >> $INSTAPOST_DIR/logs/watcher_cron.log 2>&1
+
+# Scheduler: Check for due posts every minute (also moves files after posting)
+* * * * * flock -n /tmp/instapost-scheduler.lock -c "cd $INSTAPOST_DIR && $UV_PATH run python -m instapost.cron.scheduler_cron" >> $INSTAPOST_DIR/logs/scheduler_cron.log 2>&1
+
+# Optional: Rebalance schedule daily at midnight to fill gaps
+# 0 0 * * * flock -n /tmp/instapost-rebalance.lock -c "cd $INSTAPOST_DIR && $UV_PATH run python -m instapost.rebalance --apply" >> $INSTAPOST_DIR/logs/rebalance.log 2>&1

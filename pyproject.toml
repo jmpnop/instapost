@@ -1,19 +1,15 @@
 [project]
 name = "instapost"
-version = "0.1.0"
-description = "Tool for posting images to Instagram using Facebook Graph API and Dropbox"
+version = "0.2.0"
+description = "Instagram automation via remote VM with cron-based scheduling"
 requires-python = ">=3.13"
 dependencies = [
-    "dropbox",
     "requests",
     "python-dotenv",
     "click",
     "pydantic",
-    "matplotlib>=3.10.5",
-    "watchdog>=6.0.0",
     "pytz>=2025.2",
     "iptcinfo3>=2.1.4",
-    "psutil",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +19,13 @@ dev = [
     "isort",
     "mypy",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["instapost"]
 
 [project.scripts]
 instapost = "instapost.cli:main"

@@ -46,3 +46,4 @@ scheduler copy.py
 
 # Logs
 *.log
+.env.vm

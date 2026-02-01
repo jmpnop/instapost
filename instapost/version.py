@@ -1,6 +1,6 @@
 """Version information for InstaPost."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __build__ = 1768252962  # Unix timestamp: seconds since epoch
 
 def get_version_string():

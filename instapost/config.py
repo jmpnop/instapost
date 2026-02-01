@@ -5,18 +5,24 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 
 from instapost.clients.facebook import FacebookToken, FacebookTokenError
 
 
-class DropboxConfig(BaseModel):
-    """Configuration for Dropbox API."""
+class VMConfig(BaseModel):
+    """Configuration for remote VM connection."""
 
-    app_key: str = Field(..., description="Dropbox API app key")
-    app_secret: str = Field(..., description="Dropbox API app secret")
-    refresh_token: str = Field(..., description="Dropbox API refresh token")
-    folder_path: str = Field("/INPOST333", description="Dropbox folder path for uploads")
+    host: str = Field("instapost-deploy", description="SSH host alias or user@hostname")
+    instapost_dir: str = Field("/home/ironsirens/instapost", description="Remote instapost directory")
+    images_dir: str = Field("/mnt/s3/images", description="Remote images directory")
+    processed_dir: str = Field("/mnt/s3/processed", description="Remote processed directory")
+
+
+class StaticHostingConfig(BaseModel):
+    """Configuration for self-hosted images via Angie + Cloudflare tunnel."""
+
+    base_url: str = Field(..., description="Base URL for self-hosted images")
 
 
 class InstagramConfig(BaseModel):
@@ -27,13 +33,13 @@ class InstagramConfig(BaseModel):
     access_token: str = Field(..., description="Facebook access token")
     business_account_id: str = Field(..., description="Instagram business account ID")
     _token: Optional[FacebookToken] = None
-    
+
     def validate_token(self) -> bool:
         """Validate the Facebook access token.
-        
+
         Returns:
             bool: True if the token is valid, False otherwise.
-            
+
         Raises:
             FacebookTokenError: If there's an error validating the token.
         """
@@ -43,20 +49,20 @@ class InstagramConfig(BaseModel):
                 app_id=self.app_id,
                 app_secret=self.app_secret
             )
-        
+
         return self._token.validate()
-    
+
     def is_token_expired(self, buffer_seconds: int = 86400) -> bool:
         """Check if the Facebook access token is expired or will expire soon.
-        
+
         Args:
             buffer_seconds: Number of seconds to use as a buffer (default: 1 day).
                            If the token expires within this buffer, it's considered expired.
-                           
+
         Returns:
             bool: True if the token is expired or will expire within the buffer time,
                   False otherwise.
-                  
+
         Raises:
             FacebookTokenError: If the token hasn't been validated yet.
         """
@@ -67,15 +73,15 @@ class InstagramConfig(BaseModel):
                 app_secret=self.app_secret
             )
             self._token.validate()
-        
+
         return self._token.is_expired(buffer_seconds)
-    
+
     def get_token_info(self) -> FacebookToken:
         """Get the Facebook token utility object.
-        
+
         Returns:
             FacebookToken: The Facebook token utility object.
-            
+
         Raises:
             FacebookTokenError: If there's an error validating the token.
         """
@@ -86,15 +92,16 @@ class InstagramConfig(BaseModel):
                 app_secret=self.app_secret
             )
             self._token.validate()
-        
+
         return self._token
 
 
 class Settings(BaseModel):
     """Application settings."""
 
-    dropbox: DropboxConfig
+    vm: VMConfig
     instagram: InstagramConfig
+    static_hosting: StaticHostingConfig
 
 
 def load_settings(env_file: Optional[str] = None) -> Settings:
@@ -117,36 +124,41 @@ def load_settings(env_file: Optional[str] = None) -> Settings:
         # 1. Check if explicitly provided
         if env_file and os.path.exists(env_file):
             return os.path.abspath(env_file)
-            
+
         # 2. Check current working directory
         cwd_env = os.path.abspath('.env')
         if os.path.exists(cwd_env):
             return cwd_env
-            
+
         # 3. Check instapost package directory
         package_dir = os.path.dirname(os.path.abspath(__file__))
         package_env = os.path.join(package_dir, '.env')
         if os.path.exists(package_env):
             return package_env
-            
+
         # 4. Check project root (one level up from package)
         root_env = os.path.join(os.path.dirname(package_dir), '.env')
         if os.path.exists(root_env):
             return root_env
-            
+
         return None
-    
+
     # Find and load the most appropriate .env file
     found_env = find_env_file()
     if found_env:
         load_dotenv(found_env, override=True)
 
-    # Load Dropbox configuration
-    dropbox_config = DropboxConfig(
-        app_key=os.environ.get("DROPBOX_APP_KEY", ""),
-        app_secret=os.environ.get("DROPBOX_APP_SECRET", ""),
-        refresh_token=os.environ.get("DROPBOX_REFRESH_TOKEN", ""),
-        folder_path=os.environ.get("DROPBOX_FOLDER_PATH", "/INPOST333"),
+    # Load VM configuration
+    vm_config = VMConfig(
+        host=os.environ.get("VM_HOST", "instapost-deploy"),
+        instapost_dir=os.environ.get("VM_INSTAPOST_DIR", "/home/ironsirens/instapost"),
+        images_dir=os.environ.get("VM_IMAGES_DIR", "/mnt/s3/images"),
+        processed_dir=os.environ.get("VM_PROCESSED_DIR", "/mnt/s3/processed"),
+    )
+
+    # Load static hosting configuration
+    static_hosting_config = StaticHostingConfig(
+        base_url=os.environ.get("IMAGE_BASE_URL", "https://instapost.celestialtech.io"),
     )
 
     # Load Instagram configuration
@@ -158,4 +170,8 @@ def load_settings(env_file: Optional[str] = None) -> Settings:
     )
 
     # Create and return settings
-    return Settings(dropbox=dropbox_config, instagram=instagram_config)
+    return Settings(
+        vm=vm_config,
+        instagram=instagram_config,
+        static_hosting=static_hosting_config,
+    )
