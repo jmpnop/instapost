@@ -47,3 +47,7 @@ scheduler copy.py
 # Logs
 *.log
 .env.vm
+
+# AWS
+*.pem
+*.pkg
