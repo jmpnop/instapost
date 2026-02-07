@@ -118,8 +118,14 @@ class InstagramClient:
         if location_id:
             params["location_id"] = location_id
 
-        # Create a media container
-        response = requests.post(media_url, params=params)
+        # Create a media container (with 30s timeout)
+        try:
+            response = requests.post(media_url, params=params, timeout=30)
+        except requests.Timeout:
+            raise ValueError("Timeout creating media container (30s exceeded)")
+        except requests.RequestException as e:
+            raise ValueError(f"Network error creating media container: {e}")
+
         if not response.ok:
             error_message = f"Failed to create media container: {response.text}"
             raise ValueError(error_message)
@@ -149,8 +155,21 @@ class InstagramClient:
             }
 
             print(f"[RETRY LOOP] Calling Instagram publish API (container: {creation_id})...", file=sys.stderr)
-            publish_response = requests.post(publish_url, params=publish_params)
-            print(f"[RETRY LOOP] Response status: {publish_response.status_code}", file=sys.stderr)
+            try:
+                publish_response = requests.post(publish_url, params=publish_params, timeout=30)
+                print(f"[RETRY LOOP] Response status: {publish_response.status_code}", file=sys.stderr)
+            except requests.Timeout:
+                print(f"[RETRY LOOP] Timeout on publish attempt {attempt + 1}", file=sys.stderr)
+                if attempt < max_retries - 1:
+                    continue  # Retry on timeout
+                else:
+                    raise ValueError(f"Timeout publishing media after {max_retries} attempts (30s each)")
+            except requests.RequestException as e:
+                print(f"[RETRY LOOP] Network error: {e}", file=sys.stderr)
+                if attempt < max_retries - 1:
+                    continue  # Retry on network error
+                else:
+                    raise ValueError(f"Network error publishing media after {max_retries} attempts: {e}")
 
             # Check for "media not ready" error
             if not publish_response.ok:
@@ -200,11 +219,15 @@ class InstagramClient:
             "access_token": self.config.access_token,
         }
 
-        response = requests.get(permalink_url, params=params)
-        if response.ok:
-            permalink = response.json().get("permalink")
-            if permalink:
-                return permalink
+        try:
+            response = requests.get(permalink_url, params=params, timeout=10)
+            if response.ok:
+                permalink = response.json().get("permalink")
+                if permalink:
+                    return permalink
+        except (requests.Timeout, requests.RequestException):
+            # Fallback to constructed URL on error
+            pass
 
         # Fallback to constructed URL
         return f"https://www.instagram.com/p/{post_id}/"
@@ -227,7 +250,13 @@ class InstagramClient:
             "access_token": self.config.access_token,
         }
 
-        response = requests.get(url, params=params)
+        try:
+            response = requests.get(url, params=params, timeout=15)
+        except requests.Timeout:
+            raise ValueError("Timeout getting account info (15s exceeded)")
+        except requests.RequestException as e:
+            raise ValueError(f"Network error getting account info: {e}")
+
         if not response.ok:
             error_message = f"Failed to get account info: {response.text}"
             raise ValueError(error_message)
@@ -256,7 +285,13 @@ class InstagramClient:
             "access_token": self.config.access_token,
         }
 
-        response = requests.get(url, params=params)
+        try:
+            response = requests.get(url, params=params, timeout=15)
+        except requests.Timeout:
+            raise ValueError("Timeout getting media (15s exceeded)")
+        except requests.RequestException as e:
+            raise ValueError(f"Network error getting media: {e}")
+
         if not response.ok:
             error_message = f"Failed to get media: {response.text}"
             raise ValueError(error_message)
