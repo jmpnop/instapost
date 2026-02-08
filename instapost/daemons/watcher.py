@@ -13,7 +13,7 @@ from watchdog.events import FileSystemEventHandler
 from instapost.utils import load_json, save_json, PROJECT_ROOT, setup_logging, ensure_single_instance, show_idle_animation
 from instapost.settings import TIMEZONE, WEEKLY_SCHEDULE
 from instapost.daemons.scheduler import get_next_scheduled_time
-from instapost.validation import validate_image_file, get_image_info
+from instapost.validation import validate_image_file, get_image_info, validate_and_fix
 from instapost.schedule_utils import add_to_schedule, ScheduleValidationError
 from instapost.version import get_version_string
 
@@ -260,16 +260,24 @@ class ImageHandler(FileSystemEventHandler):
             logger.error(f"Error processing {file_path}: {e}")
 
     def _is_image(self, file_path):
-        """Check if the file is a valid image for Instagram."""
-        is_valid, error = validate_image_file(file_path)
+        """Check if the file is a valid image for Instagram, with auto-fix."""
+        # Try to validate and auto-fix if needed
+        is_valid, message = validate_and_fix(file_path, auto_fix=True, backup=True)
+
         if not is_valid:
-            logger.warning(f"Image validation failed for {file_path}: {error}")
+            logger.warning(f"Image validation failed for {file_path}: {message}")
             # Log detailed info for debugging
             info = get_image_info(file_path)
             logger.debug(f"Image info: {info['width']}x{info['height']}, "
                         f"{info['size_mb']:.2f}MB, "
                         f"aspect ratio: {info['aspect_ratio']:.2f}")
-        return is_valid
+            return False
+
+        # Log if image was auto-fixed
+        if message and "Auto-fixed" in message:
+            logger.info(f"✂️  {message}")
+
+        return True
 
     def _is_already_processed(self, file_path):
         """Check if the image has already been processed."""

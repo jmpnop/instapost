@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Set
 from instapost.utils import load_json, save_json, PROJECT_ROOT, setup_logger, ensure_single_instance, show_idle_animation
 from instapost.settings import TIMEZONE, WEEKLY_SCHEDULE
 from instapost.version import get_version_string
+from instapost.validation import validate_and_fix
 
 # Set up logging
 logger = setup_logger('scheduler')
@@ -206,7 +207,16 @@ def process_file(entry: Dict[str, str]) -> Optional[Dict[str, str]]:
     if not local_path.exists():
         logger.error(f"File not found: {local_path}")
         return None
-    
+
+    # Auto-fix image if needed (aspect ratio, file size)
+    try:
+        was_fixed, fix_message = validate_and_fix(local_path, auto_fix=True, backup=True)
+        if was_fixed and fix_message:
+            logger.info(f"✂️  {fix_message}")
+    except Exception as e:
+        logger.error(f"Image validation/fix failed: {e}")
+        return None
+
     try:
         # 1. Upload to Dropbox using clients/dropbox.py (60s timeout)
         logger.info(f"Uploading {filename} to Dropbox...")
