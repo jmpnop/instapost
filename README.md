@@ -43,7 +43,7 @@ A command-line tool for automating the scheduling and posting of images to Insta
 ### 1. Watcher (`instapost/daemons/watcher.py`)
 - Monitors specified directories for new images
 - Validates image files (JPG, PNG only)
-- Maintains schedule in `schedule.json`
+- Maintains master schedule in `schedule.json` (all posts, past and future)
 - Implements process safety to prevent multiple instances
 - Shows idle animation when waiting for changes
 
@@ -100,8 +100,8 @@ instapost/
 ├── images/                         # Input: images to post
 ├── processed/                      # Output: organized by date (YYYY-MM-DD)
 ├── logs/                           # Application logs (daily rotation)
-├── schedule.json                   # Current posting schedule
-├── processed.json                  # Log of processed posts
+├── schedule.json                   # Master schedule (all posts: processed + pending)
+├── processed.json                  # Log of successfully posted items
 ├── db_token.json                   # Dropbox OAuth token storage
 ├── .env                            # Credentials (never commit!)
 ├── .env.example                    # Environment variables template
@@ -627,15 +627,23 @@ uv run instapost health  # Check system health
   - Use `chmod 600 .env` to secure it
 
 ### Data Files (automatically managed)
-- `schedule.json`: Current posting schedule
-  - Format: `{"next_post_time": "2023-01-01T12:00:00", "schedule": ["0:07:00", ...]}`
-  - Automatically updated by the scheduler
+- `schedule.json`: Master schedule of all posts (processed + pending)
+  - Contains the complete record of all scheduled posts, both past and future
+  - Format: Array of `{"filename": "...", "time": "2023-01-01T12:00:00", ...}`
+  - Automatically updated by the watcher when new images are added
   - Can be manually edited when services are stopped
 
-- `processed.json`: Log of processed posts
-  - Tracks which posts have been processed
+- `processed.json`: Log of successfully posted items
+  - Tracks which posts from schedule.json have been published
+  - Used to determine what's completed vs pending
   - Prevents duplicate posting
-  - Format: `{"filename": {"posted_at": "timestamp", "status": "success|failed"}}`
+  - Format: Array of `{"filename": "...", "posted_at": "timestamp", "url": "...", ...}`
+
+**How they work together:**
+- `schedule.json` is the source of truth for all scheduled posts
+- `processed.json` records which items have been successfully posted
+- A post is pending if it's in `schedule.json` but not in `processed.json`
+- A post is completed if it's in both files
 
 - `db_token.json`: API tokens (automatically managed)
   - Stores OAuth tokens
@@ -907,8 +915,8 @@ find logs/ -type f -name "*.log" -mtime +7 -delete
 ### Backup
 Regularly backup these important files:
 - `.env` - Contains your API credentials
-- `schedule.json` - Your posting schedule
-- `processed.json` - Record of processed posts
+- `schedule.json` - Master schedule of all posts (past and future)
+- `processed.json` - Record of successfully posted items
 
 ## 📊 Monitoring
 
