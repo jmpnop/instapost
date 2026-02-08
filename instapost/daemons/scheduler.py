@@ -108,24 +108,47 @@ def get_next_scheduled_time() -> str:
 
 # Configuration is loaded via environment variables in the subprocesses
 
-def run_command(cmd: list, cwd: Optional[Path] = None, verbose: bool = False) -> tuple[bool, str]:
-    """Run a shell command and return success status and output."""
+def run_command(cmd: list, cwd: Optional[Path] = None, verbose: bool = False, timeout: int = 120) -> tuple[bool, str]:
+    """Run a shell command and return success status and output.
+
+    Args:
+        cmd: Command to run
+        cwd: Working directory
+        verbose: Enable verbose logging
+        timeout: Timeout in seconds (default: 120s = 2 minutes)
+
+    Returns:
+        Tuple of (success, output)
+    """
     try:
         if verbose:
             logger.debug(f"Running command: {' '.join(str(c) for c in cmd)}")
-            
+
+        start_time = time.time()
+
         # Create environment with PYTHONPATH set to project root
         env = os.environ.copy()
         env['PYTHONPATH'] = str(PROJECT_ROOT)
-        
-        result = subprocess.run(
-            cmd,
-            cwd=str(cwd) if cwd else str(PROJECT_ROOT),  # Run from project root
-            capture_output=True,
-            text=True,
-            check=False,
-            env=env
-        )
+
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=str(cwd) if cwd else str(PROJECT_ROOT),  # Run from project root
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+                timeout=timeout
+            )
+        except subprocess.TimeoutExpired:
+            elapsed = time.time() - start_time
+            error_msg = f"Command timed out after {elapsed:.1f}s (limit: {timeout}s)"
+            logger.error(error_msg)
+            return False, error_msg
+
+        elapsed = time.time() - start_time
+        if verbose or elapsed > 30:
+            logger.debug(f"Command completed in {elapsed:.1f}s")
         
         if verbose:
             if result.stdout:
@@ -148,16 +171,19 @@ def run_command(cmd: list, cwd: Optional[Path] = None, verbose: bool = False) ->
 
 def process_file(entry: Dict[str, str]) -> Optional[Dict[str, str]]:
     """Process a single scheduled file using subprocess calls.
-    
+
     Args:
         entry: Dictionary containing 'filename', 'time', and optionally 'original_path' keys
-        
+
     Returns:
         dict: Result with 'filename', 'time', 'url', and 'timestamp' keys
         None: If processing failed
     """
     filename = entry['filename']
     verbose = os.environ.get('VERBOSE', '').lower() in ('1', 'true', 'yes')
+
+    # Track total processing time
+    process_start = time.time()
     
     # Try to get the file path in this order:
     # 1. original_path from the entry
@@ -182,8 +208,9 @@ def process_file(entry: Dict[str, str]) -> Optional[Dict[str, str]]:
         return None
     
     try:
-        # 1. Upload to Dropbox using clients/dropbox.py
+        # 1. Upload to Dropbox using clients/dropbox.py (60s timeout)
         logger.info(f"Uploading {filename} to Dropbox...")
+        upload_start = time.time()
         cmd = [
             sys.executable,  # Use the same Python interpreter
             '-m', 'instapost.clients.dropbox',
@@ -191,8 +218,10 @@ def process_file(entry: Dict[str, str]) -> Optional[Dict[str, str]]:
         ]
         if verbose:
             cmd.append('--verbose')
-            
-        success, output = run_command(cmd, cwd=PROJECT_ROOT, verbose=verbose)
+
+        success, output = run_command(cmd, cwd=PROJECT_ROOT, verbose=verbose, timeout=60)
+        upload_elapsed = time.time() - upload_start
+        logger.debug(f"Dropbox upload took {upload_elapsed:.1f}s")
         if not success:
             logger.error(f"Failed to upload {filename} to Dropbox")
             return None
@@ -254,8 +283,9 @@ def process_file(entry: Dict[str, str]) -> Optional[Dict[str, str]]:
                 except Exception as e:
                     logger.warning(f"Failed to read .txt file: {e}")
 
-        # 3. Post to Instagram using clients/instagram.py
+        # 3. Post to Instagram using clients/instagram.py (180s timeout = 3 minutes)
         logger.info(f"Posting {shared_url} to Instagram...")
+        post_start = time.time()
 
         cmd = [
             sys.executable,  # Use the same Python interpreter
@@ -265,8 +295,10 @@ def process_file(entry: Dict[str, str]) -> Optional[Dict[str, str]]:
         ]
         if verbose:
             cmd.append('--verbose')
-            
-        success, output = run_command(cmd, cwd=PROJECT_ROOT, verbose=True)  # Enable verbose logging for Instagram posts
+
+        success, output = run_command(cmd, cwd=PROJECT_ROOT, verbose=True, timeout=180)  # 3-minute timeout for Instagram
+        post_elapsed = time.time() - post_start
+        logger.debug(f"Instagram post took {post_elapsed:.1f}s")
         if not success:
             # The error message is now in the output, so we can log it directly
             logger.error(f"Failed to post {filename} to Instagram: {output.strip()}")
@@ -288,16 +320,25 @@ def process_file(entry: Dict[str, str]) -> Optional[Dict[str, str]]:
             return None
             
         logger.info(f"Successfully posted to Instagram: {post_url}")
-        
+
+        # Log total processing time
+        total_elapsed = time.time() - process_start
+        logger.info(f"⏱️  Total processing time: {total_elapsed:.1f}s")
+
         return {
             'filename': filename,
             'time': entry['time'],
             'url': post_url,
             'timestamp': datetime.now().isoformat()
         }
-        
+
+    except subprocess.TimeoutExpired as e:
+        total_elapsed = time.time() - process_start
+        logger.error(f"❌ Timeout processing {filename} after {total_elapsed:.1f}s: {e}")
+        return None  # Return None to indicate failure
     except Exception as e:
-        logger.error(f"Error processing {filename}: {e}", exc_info=True)
+        total_elapsed = time.time() - process_start
+        logger.error(f"❌ Error processing {filename} after {total_elapsed:.1f}s: {e}", exc_info=True)
         return None  # Return None to indicate failure
 
 # Track the last known schedule state
