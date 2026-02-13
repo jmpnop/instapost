@@ -962,6 +962,36 @@ def rebalance(apply, limit):
         sys.exit(1)
 
 
+@cli.command("analyze-outage")
+@click.option("--crash-time", required=True, help="Crash time in ISO format (YYYY-MM-DD HH:MM)")
+@click.option("--restart-time", required=True, help="Restart time in ISO format (YYYY-MM-DD HH:MM)")
+def analyze_outage_cmd(crash_time: str, restart_time: str):
+    """Analyze impact of a daemon outage period.
+
+    Provides accurate analysis of:
+    - Valid posting slots during outage
+    - Posts that were scheduled
+    - Posts that were delayed or missed
+    """
+    from datetime import datetime
+    from instapost.schedule_analyzer import format_outage_report
+    from instapost.settings import TIMEZONE
+
+    try:
+        # Parse times
+        crash = TIMEZONE.localize(datetime.strptime(crash_time, "%Y-%m-%d %H:%M"))
+        restart = TIMEZONE.localize(datetime.strptime(restart_time, "%Y-%m-%d %H:%M"))
+
+        # Generate report
+        report = format_outage_report(crash, restart)
+        click.echo(report)
+
+    except ValueError as e:
+        click.echo(f"Error parsing times: {e}", err=True)
+        click.echo("Use format: YYYY-MM-DD HH:MM", err=True)
+        sys.exit(1)
+
+
 @cli.command("install-launchd")
 def install_launchd_cmd():
     """Install launchd agents for automatic daemon management.
