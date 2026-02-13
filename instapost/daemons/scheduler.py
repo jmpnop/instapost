@@ -12,6 +12,7 @@ from instapost.utils import load_json, save_json, PROJECT_ROOT, setup_logger, en
 from instapost.settings import TIMEZONE, WEEKLY_SCHEDULE
 from instapost.version import get_version_string
 from instapost.validation import validate_and_fix
+from instapost.daemon_base import ResilientDaemon
 
 # Set up logging
 logger = setup_logger('scheduler')
@@ -484,63 +485,84 @@ def save_processed(processed: List[Dict]) -> None:
     except Exception as e:
         logger.error(f"Failed to save processed files: {e}")
 
-def run_scheduler():
-    """Run the scheduling loop."""
-    logger.info(f"🚀 {get_version_string()}")
-    logger.info("🚀 Running scheduler loop")
-    logger.info("👀 Watching for scheduled posts...")
-    
-    # Ensure required files exist
-    if not os.path.exists(SCHEDULE_FILE):
-        save_json(SCHEDULE_FILE, [])
-    if not os.path.exists(PROCESSED_FILE):
-        save_json(PROCESSED_FILE, [])
-    
-    try:
-        while True:
-            current_time = datetime.now(TIMEZONE)
-            logger.debug(f"Checking schedule at {current_time}")
-            
-            # Process any scheduled posts that are due
+class SchedulerDaemon(ResilientDaemon):
+    """Resilient scheduler daemon that never dies on errors."""
+
+    def __init__(self):
+        """Initialize scheduler daemon with 1-second check interval."""
+        super().__init__(
+            name="scheduler",
+            logger=logger,
+            check_interval=0,  # We handle sleep ourselves for precise timing
+            heartbeat_enabled=True
+        )
+        self.last_check_time = None
+
+    def setup(self):
+        """One-time setup: ensure required files exist."""
+        logger.info(f"🚀 {get_version_string()}")
+        logger.info("🚀 Running scheduler loop")
+        logger.info("👀 Watching for scheduled posts...")
+
+        # Ensure required files exist
+        if not os.path.exists(SCHEDULE_FILE):
+            save_json(SCHEDULE_FILE, [])
+        if not os.path.exists(PROCESSED_FILE):
+            save_json(PROCESSED_FILE, [])
+
+        # Ensure only one instance is running
+        ensure_single_instance('scheduler')
+
+    def work(self):
+        """Process scheduled posts that are due."""
+        current_time = datetime.now(TIMEZONE)
+        logger.debug(f"Checking schedule at {current_time}")
+
+        # Process any scheduled posts that are due
+        # Wrap in try-except to prevent work() errors from bubbling up
+        try:
             process_scheduled_posts()
-            
-            # Show idle animation
-            show_idle_animation()
-            
-            # Calculate sleep time until next minute
-            next_minute = (current_time + timedelta(minutes=1)).replace(second=0, microsecond=0)
-            sleep_seconds = (next_minute - current_time).total_seconds()
-            
-            if sleep_seconds > 0:
-                logger.debug(f"Sleeping for {sleep_seconds:.1f} seconds")
-                # Show animation while waiting
-                start_time = time.time()
-                while time.time() - start_time < min(sleep_seconds, 60):
-                    show_idle_animation()
-                    time.sleep(2)
-            else:
-                # In case we're already past the next minute
-                time.sleep(1)
-            
-    except KeyboardInterrupt:
-        logger.info("Scheduler stopped by user")
-    except Exception as e:
-        logger.error(f"Error in scheduler: {e}", exc_info=True)
-    finally:
-        logger.info("Scheduler stopped")
+        except Exception as e:
+            # Log but don't raise - let daemon base handle retry logic
+            logger.error(f"Error processing posts (will retry): {e}", exc_info=True)
+            raise  # Re-raise so daemon base can apply backoff
+
+        # Show idle animation
+        show_idle_animation()
+
+        # Calculate sleep time until next minute
+        next_minute = (current_time + timedelta(minutes=1)).replace(second=0, microsecond=0)
+        sleep_seconds = (next_minute - current_time).total_seconds()
+
+        if sleep_seconds > 0:
+            logger.debug(f"Sleeping for {sleep_seconds:.1f} seconds")
+            # Show animation while waiting
+            start_time = time.time()
+            while time.time() - start_time < min(sleep_seconds, 60):
+                # Check for shutdown signal
+                if self.shutdown_requested:
+                    break
+                show_idle_animation()
+                time.sleep(2)
+        else:
+            # In case we're already past the next minute
+            time.sleep(1)
+
+    def cleanup(self):
+        """Cleanup before shutdown."""
+        logger.info("Scheduler cleanup complete")
+
+
+def run_scheduler():
+    """Run the scheduling loop (legacy function for backward compatibility)."""
+    daemon = SchedulerDaemon()
+    return daemon.run()
+
 
 def main():
     """Main entry point for the scheduler."""
-    try:
-        # Ensure only one instance is running
-        ensure_single_instance('scheduler')
-        run_scheduler()
-    except KeyboardInterrupt:
-        logger.info("Scheduler stopped by user")
-    except Exception as e:
-        logger.critical(f"Fatal error in scheduler: {e}", exc_info=True)
-        return 1
-    return 0
+    daemon = SchedulerDaemon()
+    return daemon.run()
 
 if __name__ == '__main__':
     sys.exit(main())

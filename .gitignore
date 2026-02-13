@@ -46,3 +46,6 @@ scheduler copy.py
 
 # Logs
 *.log
+
+# Daemon heartbeat files
+.*.heartbeat

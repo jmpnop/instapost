@@ -16,6 +16,7 @@ from instapost.daemons.scheduler import get_next_scheduled_time
 from instapost.validation import validate_image_file, get_image_info, validate_and_fix
 from instapost.schedule_utils import add_to_schedule, ScheduleValidationError
 from instapost.version import get_version_string
+from instapost.daemon_base import ResilientDaemon
 
 logger = setup_logging('watcher')
 
@@ -372,60 +373,95 @@ class ImageHandler(FileSystemEventHandler):
         except Exception as e:
             logger.error(f"Failed to schedule {image_path}: {e}")
 
+class WatcherDaemon(ResilientDaemon):
+    """Resilient watcher daemon that never dies on errors."""
+
+    def __init__(self, watch_dir):
+        """Initialize watcher daemon with 2-second check interval."""
+        super().__init__(
+            name="watcher",
+            logger=logger,
+            check_interval=0,  # We handle sleep ourselves
+            heartbeat_enabled=True
+        )
+        self.watch_dir = watch_dir
+        self.observer = None
+        self.event_handler = None
+        self.watch_path = None
+
+    def setup(self):
+        """One-time setup: validate directory, process existing files, start observer."""
+        logger.info(f"👁️  {get_version_string()}")
+
+        # Ensure only one instance is running
+        ensure_single_instance('watcher')
+
+        # Validate watch directory
+        self.watch_path = Path(self.watch_dir).resolve()
+        if not self.watch_path.exists():
+            self.watch_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created watch directory: {self.watch_path}")
+        elif not self.watch_path.is_dir():
+            raise ValueError(f"Error: {self.watch_path} is not a valid directory")
+
+        # Initialize the schedule iterator and event handler
+        schedule_iterator = ScheduleIterator()
+        self.event_handler = ImageHandler(schedule_iterator)
+
+        # Process existing files in the directory
+        logger.info(f"Processing existing files in {self.watch_path}")
+
+        # Process each file
+        for file_path in sorted(self.watch_path.glob('*')):
+            if (file_path.is_file() and not file_path.name.startswith('.') and
+                any(str(file_path).lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS)):
+
+                file_path_str = str(file_path)
+
+                # Skip if already processed or scheduled
+                if (self.event_handler._is_already_processed(file_path_str) or
+                    self.event_handler._is_already_scheduled(file_path_str)):
+                    continue
+
+                # Get the next available time slot and schedule
+                scheduled_time = schedule_iterator.next_slot()
+                self.event_handler._schedule_image(file_path_str, scheduled_time)
+
+        # Set up the file system observer
+        self.observer = Observer()
+        self.observer.schedule(self.event_handler, str(self.watch_path), recursive=False)
+
+        logger.info(f"Starting to watch directory: {self.watch_path}")
+        self.observer.start()
+
+    def work(self):
+        """Idle loop - observer runs in background thread."""
+        # Just show animation and sleep - observer handles file events
+        show_idle_animation()
+        time.sleep(2)
+
+    def cleanup(self):
+        """Stop observer before shutdown."""
+        if self.observer:
+            logger.info("Stopping file system observer...")
+            try:
+                self.observer.stop()
+                self.observer.join(timeout=5)
+            except Exception as e:
+                logger.error(f"Error stopping observer: {e}")
+        logger.info("Watcher cleanup complete")
+
+
 def watch_directory(watch_dir):
-    """Start watching a directory for new images."""
-    logger.info(f"👁️  {get_version_string()}")
-    ensure_single_instance('watcher')
+    """Start watching a directory for new images (legacy function for backward compatibility)."""
+    daemon = WatcherDaemon(watch_dir)
+    return daemon.run()
 
-    watch_path = Path(watch_dir).resolve()
-    if not watch_path.exists() or not watch_path.is_dir():
-        logger.error(f"Error: {watch_path} is not a valid directory")
-        return False
-
-    # Initialize the schedule iterator
-    schedule_iterator = ScheduleIterator()
-    event_handler = ImageHandler(schedule_iterator)
-
-    # Process existing files in the directory
-    logger.info(f"Processing existing files in {watch_path}")
-    
-    # Process each file
-    for file_path in sorted(watch_path.glob('*')):
-        if (file_path.is_file() and not file_path.name.startswith('.') and
-            any(str(file_path).lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS)):
-            
-            file_path_str = str(file_path)
-            
-            # Skip if already processed or scheduled
-            if (event_handler._is_already_processed(file_path_str) or
-                event_handler._is_already_scheduled(file_path_str)):
-                continue
-                
-            # Get the next available time slot and schedule
-            scheduled_time = schedule_iterator.next_slot()
-            event_handler._schedule_image(file_path_str, scheduled_time)
-    
-    # Set up the file system observer
-    observer = Observer()
-    observer.schedule(event_handler, str(watch_path), recursive=False)
-    
-    logger.info(f"Starting to watch directory: {watch_path}")
-    observer.start()
-    
-    try:
-        while True:
-            show_idle_animation()
-            time.sleep(2)
-            
-    except KeyboardInterrupt:
-        observer.stop()
-    
-    observer.join()
-    return True
 
 if __name__ == '__main__':
     if len(sys.argv) != 2:
         print(f"Usage: {sys.argv[0]} <directory_to_watch>")
         sys.exit(1)
-    
-    watch_directory(sys.argv[1])
+
+    daemon = WatcherDaemon(sys.argv[1])
+    sys.exit(daemon.run())

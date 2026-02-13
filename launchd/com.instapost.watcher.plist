@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Service Label (must match filename) -->
+    <key>Label</key>
+    <string>com.instapost.watcher</string>
+
+    <!-- Program to run -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alenak/Desktop/instapost/.venv/bin/python</string>
+        <string>-m</string>
+        <string>instapost.daemons.watcher</string>
+        <string>/Users/alenak/Desktop/instapost/images</string>
+    </array>
+
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>/Users/alenak/Desktop/instapost</string>
+
+    <!-- Start at login/boot -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Keep alive - restart if crashes -->
+    <key>KeepAlive</key>
+    <dict>
+        <!-- Always restart -->
+        <key>SuccessfulExit</key>
+        <false/>
+        <!-- Restart even if crashes -->
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <!-- Restart throttling (don't restart too quickly) -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Standard output/error logs -->
+    <key>StandardOutPath</key>
+    <string>/Users/alenak/Desktop/instapost/logs/watcher.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/alenak/Desktop/instapost/logs/watcher.stderr.log</string>
+
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <key>PYTHONPATH</key>
+        <string>/Users/alenak/Desktop/instapost</string>
+    </dict>
+
+    <!-- Nice level (priority) -->
+    <key>Nice</key>
+    <integer>0</integer>
+
+    <!-- Process type -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <!-- Exit timeout (seconds to wait for graceful shutdown) -->
+    <key>ExitTimeOut</key>
+    <integer>30</integer>
+</dict>
+</plist>
