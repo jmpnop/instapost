@@ -263,7 +263,7 @@ class ImageHandler(FileSystemEventHandler):
     def _is_image(self, file_path):
         """Check if the file is a valid image for Instagram, with auto-fix."""
         # Try to validate and auto-fix if needed
-        is_valid, message = validate_and_fix(file_path, auto_fix=True, backup=True)
+        is_valid, message = validate_and_fix(file_path, auto_fix=True)
 
         if not is_valid:
             logger.warning(f"Image validation failed for {file_path}: {message}")

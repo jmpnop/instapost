@@ -142,7 +142,7 @@ def validate_and_raise(image_path: str | Path) -> None:
         raise ImageValidationError(error)
 
 
-def auto_fix_image(image_path: str | Path, backup: bool = True) -> Tuple[bool, str]:
+def auto_fix_image(image_path: str | Path) -> Tuple[bool, str]:
     """Automatically fix image to meet Instagram requirements.
 
     Fixes applied:
@@ -152,7 +152,6 @@ def auto_fix_image(image_path: str | Path, backup: bool = True) -> Tuple[bool, s
 
     Args:
         image_path: Path to the image file
-        backup: If True, creates a backup of original (image_path.backup.ext)
 
     Returns:
         Tuple of (was_modified, message)
@@ -250,21 +249,12 @@ def auto_fix_image(image_path: str | Path, backup: bool = True) -> Tuple[bool, s
 
         # Save the fixed image
         if modified:
-            # Create backup if requested
-            if backup:
-                backup_path = path.with_suffix('.backup' + path.suffix)
-                path.rename(backup_path)
-                logger.debug(f"Created backup: {backup_path}")
-
-            # Save fixed image
+            # Save fixed image directly (overwrite original)
             img.save(path, format=original_format, quality=95, optimize=True)
 
             # Verify the fix
             is_valid, error = validate_image_file(path)
             if not is_valid:
-                # Restore backup if validation still fails
-                if backup and backup_path.exists():
-                    backup_path.rename(path)
                 raise ImageValidationError(f"Auto-fix failed: {error}")
 
             final_size = path.stat().st_size
@@ -279,13 +269,12 @@ def auto_fix_image(image_path: str | Path, backup: bool = True) -> Tuple[bool, s
         raise ImageValidationError(f"Failed to auto-fix image: {str(e)}")
 
 
-def validate_and_fix(image_path: str | Path, auto_fix: bool = True, backup: bool = True) -> Tuple[bool, Optional[str]]:
+def validate_and_fix(image_path: str | Path, auto_fix: bool = True) -> Tuple[bool, Optional[str]]:
     """Validate image and optionally auto-fix if invalid.
 
     Args:
         image_path: Path to the image file
         auto_fix: If True, attempt to auto-fix invalid images
-        backup: If True and auto_fix is True, create backup before fixing
 
     Returns:
         Tuple of (is_valid, message)
@@ -303,7 +292,7 @@ def validate_and_fix(image_path: str | Path, auto_fix: bool = True, backup: bool
 
     # Try to auto-fix
     try:
-        was_modified, fix_message = auto_fix_image(image_path, backup=backup)
+        was_modified, fix_message = auto_fix_image(image_path)
         if was_modified:
             return True, f"Auto-fixed: {fix_message}"
         return True, None

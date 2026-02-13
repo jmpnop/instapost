@@ -211,7 +211,7 @@ def process_file(entry: Dict[str, str]) -> Optional[Dict[str, str]]:
 
     # Auto-fix image if needed (aspect ratio, file size)
     try:
-        was_fixed, fix_message = validate_and_fix(local_path, auto_fix=True, backup=True)
+        was_fixed, fix_message = validate_and_fix(local_path, auto_fix=True)
         if was_fixed and fix_message:
             logger.info(f"✂️  {fix_message}")
     except Exception as e:
