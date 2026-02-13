@@ -22,10 +22,14 @@ A command-line tool for automating the scheduling and posting of images to Insta
 - **Weekly Schedule**: Configure custom posting times per day
 
 ### Reliability & Error Handling
+- **🛡️ Resilient Daemon Architecture**: Daemons NEVER exit on errors - automatic recovery with exponential backoff
+- **🔄 Auto-Restart**: macOS launchd integration ensures daemons restart automatically on crashes
+- **❤️ Heartbeat Monitoring**: Real-time health checks detect hung processes
 - **Retry Logic**: Auto-retry API failures with exponential backoff (5 attempts)
 - **Smart Image Validation**: Enforces Instagram requirements (dimensions, aspect ratio), auto-resizes oversized images
 - **Process Safety**: Single-instance protection prevents conflicts
 - **Health Monitoring**: System health checks (daemons, disk, schedule)
+- **Dual-Layer Protection**: Application-level error recovery + OS-level process supervision
 
 ### Monitoring & Debugging
 - **Real-time Logs**: View daemon logs with filtering and follow mode
@@ -40,12 +44,30 @@ A command-line tool for automating the scheduling and posting of images to Insta
 
 ## Core Components
 
+### Resilient Daemon Architecture
+
+All daemons inherit from `ResilientDaemon` base class (`instapost/daemon_base.py`):
+
+**Enterprise-Grade Reliability:**
+- ✅ **Never exits on errors** - catches all exceptions and retries forever
+- ✅ **Exponential backoff** - prevents tight error loops (5s → 10s → 20s → ... → 5min)
+- ✅ **Graceful shutdown** - responds to SIGTERM/SIGINT signals
+- ✅ **Heartbeat monitoring** - writes `.{daemon}.heartbeat` files for health checks
+- ✅ **Full error logging** - captures stack traces for debugging
+
+**OS-Level Supervision (macOS):**
+- ✅ **launchd integration** - automatic process monitoring
+- ✅ **Auto-restart on crashes** - 10-second throttle interval
+- ✅ **Start on boot/login** - daemons always running
+- ✅ **Survives**: network failures, API errors, file system issues, reboots, crashes
+
 ### 1. Watcher (`instapost/daemons/watcher.py`)
 - Monitors specified directories for new images
 - Validates image files (JPG, PNG only)
 - Maintains master schedule in `schedule.json` (all posts, past and future)
 - Implements process safety to prevent multiple instances
 - Shows idle animation when waiting for changes
+- **Resilient**: Recovers from file system errors, permission issues
 
 ### 2. Scheduler (`instapost/daemons/scheduler.py`)
 - Processes scheduled posts according to `WEEKLY_SCHEDULE`
@@ -56,11 +78,13 @@ A command-line tool for automating the scheduling and posting of images to Insta
   2. Processes images through Dropbox upload (via `clients/dropbox.py`)
   3. Posts to Instagram via Facebook Graph API (via `clients/instagram.py`)
   4. Updates `processed.json`
+- **Resilient**: Recovers from network errors, API failures, timeouts
 
 ### 3. Mover (`instapost/daemons/mover.py`)
 - Monitors `processed.json` for completed posts
 - Organizes processed files into dated directories
 - Keeps working directory clean
+- **Resilient**: Recovers from file system errors, disk full conditions
 
 ## 📁 Project Structure
 
@@ -75,8 +99,10 @@ instapost/
 │   ├── retry.py                    # Exponential backoff retry decorator
 │   ├── schedule_utils.py           # Schedule validation & management
 │   ├── generate_captions.py        # AI-powered caption generation
+│   ├── daemon_base.py              # 🆕 Resilient daemon base class
+│   ├── launchd_utils.py            # 🆕 macOS launchd management utilities
 │   │
-│   ├── daemons/                    # Long-running processes
+│   ├── daemons/                    # Long-running processes (all resilient)
 │   │   ├── watcher.py              # File system monitoring daemon
 │   │   ├── scheduler.py            # Post processing daemon
 │   │   └── mover.py                # File organization daemon
@@ -90,6 +116,12 @@ instapost/
 │       ├── db_token.py             # Dropbox OAuth2 authentication
 │       ├── fb_token.py             # Facebook token inspection
 │       └── image_gen.py            # Test image generator
+│
+├── launchd/                        # 🆕 macOS launchd configurations
+│   ├── com.instapost.scheduler.plist  # Scheduler auto-restart config
+│   ├── com.instapost.watcher.plist    # Watcher auto-restart config
+│   ├── com.instapost.mover.plist      # Mover auto-restart config
+│   └── README.md                      # launchd documentation
 │
 ├── test/                           # Test scripts
 │   ├── dropbox_api.py              # Dropbox API integration test
@@ -344,9 +376,26 @@ Format: `WEEKLY_SCHEDULE="0:07:00,2:11:00,4:17:00,5:09:00,6:18:00"`
 
 **All commands use `uv run` to execute in the virtual environment:**
 
-### Quick Start
+### Quick Start (macOS - Recommended)
 ```bash
-# Start all daemons (watcher, scheduler, mover)
+# 1. Install launchd for auto-restart (ONE-TIME SETUP)
+uv run instapost install-launchd
+
+# 2. Start all daemons (watcher, scheduler, mover)
+uv run instapost start
+
+# 3. Check status (shows heartbeat health)
+uv run instapost status
+
+# Daemons now run forever:
+#  ✅ Auto-restart on crashes
+#  ✅ Start on boot/login
+#  ✅ Never stop running
+```
+
+### Quick Start (Manual Mode)
+```bash
+# Start all daemons (no auto-restart)
 uv run instapost start
 
 # Check status
@@ -354,15 +403,27 @@ uv run instapost status
 
 # Stop all daemons
 uv run instapost stop
+
+# Note: Install launchd for auto-restart protection
 ```
 
 ### Daemon Management
 ```bash
+# launchd Setup (macOS - Recommended)
+uv run instapost install-launchd    # Enable auto-restart on crashes
+uv run instapost uninstall-launchd  # Disable auto-restart
+
+# Start/Stop Daemons
 uv run instapost start          # Start all daemons
-uv run instapost stop           # Stop all daemons
-uv run instapost status         # Check daemon status
+uv run instapost stop           # Stop all daemons (temporarily)
 uv run instapost restart        # Restart all daemons
+uv run instapost status         # Check daemon status + heartbeat health
 uv run instapost health         # System health check
+
+# Status shows:
+#  - Daemon PIDs and runtime
+#  - Heartbeat age (detects hung processes)
+#  - Management mode (launchd vs manual)
 ```
 
 ### Queue Management
@@ -649,6 +710,70 @@ uv run instapost health  # Check system health
   - Stores OAuth tokens
   - Automatically refreshed as needed
   - Should be included in `.gitignore`
+
+## 🛡️ Resilient Daemon Architecture
+
+InstaPost daemons are designed to **NEVER stop running**, even in the face of errors.
+
+### Dual-Layer Protection
+
+**1. Application Layer** (`ResilientDaemon` base class):
+- ✅ Catches ALL exceptions (network errors, API failures, file system issues)
+- ✅ Logs errors with full stack traces for debugging
+- ✅ Waits with exponential backoff (5s → 10s → 20s → ... → 5min)
+- ✅ Retries forever until operation succeeds
+- ✅ Only exits on explicit shutdown signals (SIGTERM/SIGINT)
+
+**2. OS Layer** (macOS launchd):
+- ✅ Monitors process health
+- ✅ Auto-restarts on crashes (even if Python interpreter crashes)
+- ✅ 10-second throttle interval prevents tight restart loops
+- ✅ Starts daemons on boot/login automatically
+- ✅ Survives system reboots and user logout
+
+### What This Means
+
+Your daemons will **survive**:
+- ❌ Network failures (DNS errors, API timeouts, connection drops)
+- ❌ API errors (Instagram/Facebook/Dropbox temporary issues)
+- ❌ File system errors (disk full, permission denied)
+- ❌ Python exceptions (any unexpected error in code)
+- ❌ Process kills (except explicit `instapost stop`)
+- ❌ Out of memory crashes
+- ❌ System reboots
+- ❌ User logout/login
+
+### Monitoring Daemon Health
+
+```bash
+# Check daemon status and heartbeat
+uv run instapost status
+
+# Output shows:
+# ✅ Scheduler : Running (PID: 12345, Runtime: 02:15)
+# Heartbeat Status:
+#   Scheduler : ✅ Healthy (3s ago)
+
+# Heartbeat updates every ~60s
+# If heartbeat is stale (>2min), daemon may be hung
+```
+
+### launchd Configuration
+
+Installation creates plist files in `~/Library/LaunchAgents/`:
+```xml
+<key>KeepAlive</key>
+<dict>
+    <key>SuccessfulExit</key>
+    <false/>        <!-- Restart even on clean exit -->
+    <key>Crashed</key>
+    <true/>         <!-- Always restart on crashes -->
+</dict>
+<key>ThrottleInterval</key>
+<integer>10</integer>  <!-- Wait 10s between restarts -->
+```
+
+See `launchd/README.md` for detailed launchd documentation.
 
 ## 🔍 Troubleshooting
 

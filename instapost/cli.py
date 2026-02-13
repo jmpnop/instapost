@@ -241,155 +241,263 @@ def _get_process_runtime(pid):
 @cli.command()
 def start():
     """Start all InstaPost daemons (watcher, scheduler, mover)."""
+    from instapost.launchd_utils import is_launchd_installed, start_service, SERVICES
+
     click.echo("Starting InstaPost daemons...")
     click.echo("=" * 40)
-
-    # Check if any daemons are already running
-    pids = _get_daemon_pids()
-    if pids:
-        click.echo("Warning: Some InstaPost daemons are already running")
-        click.echo("Run 'instapost stop' first to stop them")
-        sys.exit(1)
 
     # Ensure directories exist
     os.makedirs(PROJECT_ROOT / "logs", exist_ok=True)
     os.makedirs(PROJECT_ROOT / "images", exist_ok=True)
     os.makedirs(PROJECT_ROOT / "processed", exist_ok=True)
 
-    # Start watcher
-    click.echo("Starting watcher daemon...")
-    with open(PROJECT_ROOT / "logs" / "watcher.log", "a") as log:
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "instapost.daemons.watcher", "./images"],
-            stdout=log,
-            stderr=log,
-            cwd=PROJECT_ROOT,
-            start_new_session=True
-        )
-    click.echo(f"  Watcher started (PID: {proc.pid})")
-    time.sleep(1)
+    # Check if launchd is installed
+    if is_launchd_installed():
+        click.echo("Using launchd for daemon management...")
+        click.echo()
 
-    # Start scheduler
-    click.echo("Starting scheduler daemon...")
-    with open(PROJECT_ROOT / "logs" / "scheduler.log", "a") as log:
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "instapost.daemons.scheduler"],
-            stdout=log,
-            stderr=log,
-            cwd=PROJECT_ROOT,
-            start_new_session=True
-        )
-    click.echo(f"  Scheduler started (PID: {proc.pid})")
-    time.sleep(1)
+        # Start each service via launchd
+        success_count = 0
+        for service_name in SERVICES.keys():
+            success, msg = start_service(service_name)
+            if success:
+                click.echo(f"✅ {msg}")
+                success_count += 1
+            else:
+                click.echo(f"❌ {msg}")
 
-    # Start mover
-    click.echo("Starting mover daemon...")
-    with open(PROJECT_ROOT / "logs" / "mover.log", "a") as log:
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "instapost.daemons.mover", "./images", "./processed"],
-            stdout=log,
-            stderr=log,
-            cwd=PROJECT_ROOT,
-            start_new_session=True
-        )
-    click.echo(f"  Mover started (PID: {proc.pid})")
+        click.echo()
+        click.echo("=" * 40)
+        if success_count == len(SERVICES):
+            click.echo("All daemons started successfully!")
+        else:
+            click.echo(f"Started {success_count}/{len(SERVICES)} daemons")
+        click.echo()
+        click.echo("Monitor logs with: instapost logs")
+        click.echo("Check status with: instapost status")
 
-    click.echo()
-    click.echo("=" * 40)
-    click.echo("All daemons started successfully!")
-    click.echo()
-    click.echo("Monitor logs with:")
-    click.echo("  tail -f logs/watcher.log")
-    click.echo("  tail -f logs/scheduler.log")
-    click.echo("  tail -f logs/mover.log")
-    click.echo()
-    click.echo("Check status with: instapost status")
-    click.echo("Stop daemons with: instapost stop")
+    else:
+        # Fallback to manual process management
+        click.echo("launchd not installed, using manual process management...")
+        click.echo("(Install launchd for auto-restart: instapost install-launchd)")
+        click.echo()
+
+        # Check if any daemons are already running
+        pids = _get_daemon_pids()
+        if pids:
+            click.echo("Warning: Some InstaPost daemons are already running")
+            click.echo("Run 'instapost stop' first to stop them")
+            sys.exit(1)
+
+        # Start watcher
+        click.echo("Starting watcher daemon...")
+        with open(PROJECT_ROOT / "logs" / "watcher.log", "a") as log:
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "instapost.daemons.watcher", "./images"],
+                stdout=log,
+                stderr=log,
+                cwd=PROJECT_ROOT,
+                start_new_session=True
+            )
+        click.echo(f"  Watcher started (PID: {proc.pid})")
+        time.sleep(1)
+
+        # Start scheduler
+        click.echo("Starting scheduler daemon...")
+        with open(PROJECT_ROOT / "logs" / "scheduler.log", "a") as log:
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "instapost.daemons.scheduler"],
+                stdout=log,
+                stderr=log,
+                cwd=PROJECT_ROOT,
+                start_new_session=True
+            )
+        click.echo(f"  Scheduler started (PID: {proc.pid})")
+        time.sleep(1)
+
+        # Start mover
+        click.echo("Starting mover daemon...")
+        with open(PROJECT_ROOT / "logs" / "mover.log", "a") as log:
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "instapost.daemons.mover", "./images", "./processed"],
+                stdout=log,
+                stderr=log,
+                cwd=PROJECT_ROOT,
+                start_new_session=True
+            )
+        click.echo(f"  Mover started (PID: {proc.pid})")
+
+        click.echo()
+        click.echo("=" * 40)
+        click.echo("All daemons started successfully!")
+        click.echo()
+        click.echo("Monitor logs with:")
+        click.echo("  tail -f logs/watcher.log")
+        click.echo("  tail -f logs/scheduler.log")
+        click.echo("  tail -f logs/mover.log")
+        click.echo()
+        click.echo("Check status with: instapost status")
+        click.echo("Stop daemons with: instapost stop")
 
 
 @cli.command()
 def stop():
     """Stop all InstaPost daemons."""
+    from instapost.launchd_utils import is_launchd_installed, stop_service, SERVICES
+
     click.echo("Stopping InstaPost daemons...")
     click.echo("=" * 40)
 
-    # Get all daemon PIDs
-    pids = _get_daemon_pids()
-
-    if not pids:
-        click.echo("No InstaPost daemons are currently running")
-        return
-
-    click.echo(f"Found {len(pids)} daemon(s) running")
-    click.echo()
-
-    # Stop each daemon
-    for pid in pids:
-        daemon_name = _get_daemon_info(pid)
-        click.echo(f"Stopping {daemon_name} (PID: {pid})...")
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            click.echo(f"  Already stopped")
-        except Exception as e:
-            click.echo(f"  Error: {e}")
-
-    # Wait for graceful shutdown
-    time.sleep(2)
-
-    # Check if any processes are still running
-    remaining = _get_daemon_pids()
-
-    if remaining:
+    # Check if launchd is installed
+    if is_launchd_installed():
+        click.echo("Using launchd for daemon management...")
         click.echo()
-        click.echo("Some processes didn't stop gracefully. Force killing...")
-        for pid in remaining:
+
+        # Stop each service via launchd
+        success_count = 0
+        for service_name in SERVICES.keys():
+            success, msg = stop_service(service_name)
+            if success:
+                click.echo(f"✅ {msg}")
+                success_count += 1
+            else:
+                click.echo(f"⚠️  {msg}")
+
+        click.echo()
+        click.echo("=" * 40)
+        if success_count == len(SERVICES):
+            click.echo("All daemons stopped successfully!")
+        else:
+            click.echo(f"Stopped {success_count}/{len(SERVICES)} daemons")
+
+    else:
+        # Fallback to manual process management
+        click.echo("Using manual process management...")
+        click.echo()
+
+        # Get all daemon PIDs
+        pids = _get_daemon_pids()
+
+        if not pids:
+            click.echo("No InstaPost daemons are currently running")
+            return
+
+        click.echo(f"Found {len(pids)} daemon(s) running")
+        click.echo()
+
+        # Stop each daemon
+        for pid in pids:
+            daemon_name = _get_daemon_info(pid)
+            click.echo(f"Stopping {daemon_name} (PID: {pid})...")
             try:
-                os.kill(pid, signal.SIGKILL)
-            except Exception:
-                pass
-        time.sleep(1)
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                click.echo(f"  Already stopped")
+            except Exception as e:
+                click.echo(f"  Error: {e}")
 
-    # Final check
-    final_check = _get_daemon_pids()
+        # Wait for graceful shutdown
+        time.sleep(2)
 
-    if final_check:
+        # Check if any processes are still running
+        remaining = _get_daemon_pids()
+
+        if remaining:
+            click.echo()
+            click.echo("Some processes didn't stop gracefully. Force killing...")
+            for pid in remaining:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except Exception:
+                    pass
+            time.sleep(1)
+
+        # Final check
+        final_check = _get_daemon_pids()
+
+        if final_check:
+            click.echo()
+            click.echo("Error: Some daemons are still running")
+            click.echo(f"PIDs: {final_check}")
+            sys.exit(1)
+
         click.echo()
-        click.echo("Error: Some daemons are still running")
-        click.echo(f"PIDs: {final_check}")
-        sys.exit(1)
-
-    click.echo()
-    click.echo("=" * 40)
-    click.echo("All daemons stopped successfully!")
+        click.echo("=" * 40)
+        click.echo("All daemons stopped successfully!")
 
 
 @cli.command()
 def status():
     """Check status of InstaPost daemons."""
     import json
+    from instapost.launchd_utils import is_launchd_installed, get_all_service_statuses
 
     click.echo("InstaPost Daemon Status")
     click.echo("=" * 40)
     click.echo()
 
-    # Get all daemon PIDs
-    pids = _get_daemon_pids()
+    # Check if launchd is installed
+    using_launchd = is_launchd_installed()
 
-    # Track which daemons are running
-    running_daemons = {}
-    for pid in pids:
-        daemon_name = _get_daemon_info(pid)
-        runtime = _get_process_runtime(pid)
-        running_daemons[daemon_name] = (pid, runtime)
+    if using_launchd:
+        click.echo("Management: launchd (auto-restart enabled)")
+        click.echo()
 
-    # Check each expected daemon
-    for daemon_name in ["watcher", "scheduler", "mover"]:
-        if daemon_name in running_daemons:
-            pid, runtime = running_daemons[daemon_name]
-            click.echo(f"✅ {daemon_name.capitalize():10s}: Running (PID: {pid}, Runtime: {runtime})")
-        else:
-            click.echo(f"❌ {daemon_name.capitalize():10s}: Not running")
+        # Get status from launchd
+        statuses = get_all_service_statuses()
+
+        for daemon_name in ["scheduler", "watcher", "mover"]:
+            status_info = statuses.get(daemon_name, {})
+            loaded = status_info.get("loaded", False)
+            running = status_info.get("running", False)
+            pid = status_info.get("pid")
+
+            if running and pid:
+                runtime = _get_process_runtime(pid)
+                click.echo(f"✅ {daemon_name.capitalize():10s}: Running (PID: {pid}, Runtime: {runtime})")
+            elif loaded:
+                click.echo(f"⚠️  {daemon_name.capitalize():10s}: Loaded but not running")
+            else:
+                click.echo(f"❌ {daemon_name.capitalize():10s}: Not loaded")
+
+        # Check heartbeats
+        click.echo()
+        click.echo("Heartbeat Status:")
+        from instapost.daemon_base import ResilientDaemon
+        from instapost.utils import setup_logger
+
+        for daemon_name in ["scheduler", "watcher", "mover"]:
+            logger = setup_logger(daemon_name)
+            daemon = ResilientDaemon(daemon_name, logger)
+            age = daemon.get_heartbeat_age()
+
+            if age is None:
+                click.echo(f"  {daemon_name.capitalize():10s}: No heartbeat file")
+            elif age < 120:  # Less than 2 minutes
+                click.echo(f"  {daemon_name.capitalize():10s}: ✅ Healthy ({int(age)}s ago)")
+            else:
+                click.echo(f"  {daemon_name.capitalize():10s}: ⚠️  Stale ({int(age)}s ago)")
+    else:
+        click.echo("Management: manual (install launchd for auto-restart)")
+        click.echo()
+
+        # Get all daemon PIDs
+        pids = _get_daemon_pids()
+
+        # Track which daemons are running
+        running_daemons = {}
+        for pid in pids:
+            daemon_name = _get_daemon_info(pid)
+            runtime = _get_process_runtime(pid)
+            running_daemons[daemon_name] = (pid, runtime)
+
+        # Check each expected daemon
+        for daemon_name in ["watcher", "scheduler", "mover"]:
+            if daemon_name in running_daemons:
+                pid, runtime = running_daemons[daemon_name]
+                click.echo(f"✅ {daemon_name.capitalize():10s}: Running (PID: {pid}, Runtime: {runtime})")
+            else:
+                click.echo(f"❌ {daemon_name.capitalize():10s}: Not running")
 
     click.echo()
     click.echo("=" * 40)
@@ -434,19 +542,6 @@ def status():
             pass
 
     click.echo()
-
-    # Overall status
-    all_running = all(d in running_daemons for d in ["watcher", "scheduler", "mover"])
-    none_running = not any(d in running_daemons for d in ["watcher", "scheduler", "mover"])
-
-    if all_running:
-        click.echo("Status: All systems operational ✅")
-    elif none_running:
-        click.echo("Status: All systems stopped ❌")
-        click.echo("Run 'instapost start' to start daemons")
-    else:
-        click.echo("Status: Partial failure ⚠️")
-        click.echo("Some daemons are not running. Run 'instapost restart' to restart all.")
 
 
 @cli.command()
@@ -865,6 +960,79 @@ def rebalance(apply, limit):
     except Exception as e:
         click.echo(f"Error rebalancing schedule: {e}", err=True)
         sys.exit(1)
+
+
+@cli.command("install-launchd")
+def install_launchd_cmd():
+    """Install launchd agents for automatic daemon management.
+
+    This enables:
+    - Automatic start on login/boot
+    - Auto-restart on crashes
+    - OS-level process supervision
+    """
+    from instapost.launchd_utils import install_launchd, load_service, SERVICES
+
+    click.echo("Installing InstaPost launchd agents...")
+    click.echo("=" * 50)
+
+    # Install plist files
+    success, message = install_launchd()
+    if not success:
+        click.echo(f"❌ {message}", err=True)
+        sys.exit(1)
+
+    click.echo(f"✅ {message}")
+    click.echo()
+
+    # Load each service
+    click.echo("Loading services...")
+    for service_name in SERVICES.keys():
+        success, msg = load_service(service_name)
+        if success:
+            click.echo(f"  ✅ {msg}")
+        else:
+            click.echo(f"  ⚠️  {msg}")
+
+    click.echo()
+    click.echo("=" * 50)
+    click.echo("✅ launchd agents installed successfully!")
+    click.echo()
+    click.echo("Services will now:")
+    click.echo("  • Start automatically on login/boot")
+    click.echo("  • Restart automatically if they crash")
+    click.echo("  • Never stop running (unless explicitly stopped)")
+    click.echo()
+    click.echo("Next steps:")
+    click.echo("  1. Start services: instapost start")
+    click.echo("  2. Check status: instapost status")
+    click.echo("  3. View logs: instapost logs")
+
+
+@cli.command("uninstall-launchd")
+def uninstall_launchd_cmd():
+    """Uninstall launchd agents.
+
+    This removes OS-level daemon management. Services must be
+    managed manually after uninstalling.
+    """
+    from instapost.launchd_utils import uninstall_launchd
+
+    click.echo("Uninstalling InstaPost launchd agents...")
+    click.echo("=" * 50)
+
+    success, message = uninstall_launchd()
+    if not success:
+        click.echo(f"❌ {message}", err=True)
+        sys.exit(1)
+
+    click.echo(f"✅ {message}")
+    click.echo()
+    click.echo("=" * 50)
+    click.echo("✅ launchd agents uninstalled successfully!")
+    click.echo()
+    click.echo("Note: Services must now be managed manually.")
+    click.echo("Use 'instapost start/stop' to control them.")
 
 
 def main():
