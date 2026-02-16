@@ -423,12 +423,15 @@ uv run instapost health         # System health check
 # Status shows:
 #  - Daemon PIDs and runtime
 #  - Heartbeat age (detects hung processes)
+#  - Next scheduled post with countdown
 #  - Management mode (launchd vs manual)
 ```
 
 ### Queue Management
 ```bash
-uv run instapost queue                              # View scheduled posts
+uv run instapost queue                              # View queued posts (not yet posted)
+uv run instapost queue --posted                     # View posted items with URLs
+uv run instapost queue --all                        # View all (queued + posted)
 uv run instapost cancel <filename>                  # Remove from schedule
 uv run instapost reschedule <filename> <new-time>   # Change post time
 uv run instapost rebalance                          # Preview schedule optimization
@@ -1030,6 +1033,16 @@ pip install \
 
 ### Cleanup
 ```bash
+# Clean up orphaned schedule entries (preview)
+uv run instapost cleanup --orphaned --dry-run
+
+# Remove orphaned schedule entries (files that no longer exist)
+uv run instapost cleanup --orphaned
+
+# Remove old .backup.backup files
+uv run instapost cleanup --backup --dry-run  # Preview
+uv run instapost cleanup --backup            # Remove
+
 # Remove old processed files (older than 30 days)
 find processed/ -type f -mtime +30 -delete
 
