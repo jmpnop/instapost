@@ -26,13 +26,37 @@ def get_caption_prompt() -> str:
     return prompt
 
 
+def get_claude_path() -> str:
+    """Get the path to claude CLI, checking common locations."""
+    # Check if CLAUDE_PATH is set in environment
+    claude_path = os.getenv('CLAUDE_PATH')
+    if claude_path and os.path.exists(claude_path):
+        return claude_path
+
+    # Check common installation locations
+    common_paths = [
+        os.path.expanduser('~/.local/bin/claude'),
+        '/usr/local/bin/claude',
+        '/opt/homebrew/bin/claude',
+    ]
+
+    for path in common_paths:
+        if os.path.exists(path):
+            return path
+
+    # Fallback to just 'claude' and hope it's in PATH
+    return 'claude'
+
+
 def generate_caption(image_path: Path) -> str:
     """Generate a caption for the given image using AI CLI."""
     prompt_template = get_caption_prompt()
     prompt = prompt_template.format(image_path=image_path.resolve())
 
+    claude_cmd = get_claude_path()
+
     result = subprocess.run(
-        ['claude', '-p', prompt],
+        [claude_cmd, '-p', prompt],
         capture_output=True,
         text=True
     )

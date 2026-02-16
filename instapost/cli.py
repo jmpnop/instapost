@@ -509,19 +509,59 @@ def status():
     schedule_file = PROJECT_ROOT / "schedule.json"
     processed_file = PROJECT_ROOT / "processed.json"
 
+    scheduled_data = []
+    processed_filenames = set()
+
     if schedule_file.exists():
         try:
             with open(schedule_file) as f:
-                scheduled = len(json.load(f))
-            click.echo(f"Scheduled posts: {scheduled}")
+                scheduled_data = json.load(f)
+            click.echo(f"Scheduled posts: {len(scheduled_data)}")
         except Exception:
             pass
 
     if processed_file.exists():
         try:
             with open(processed_file) as f:
-                processed = len(json.load(f))
-            click.echo(f"Processed posts: {processed}")
+                processed = json.load(f)
+                processed_filenames = {p['filename'] for p in processed}
+            click.echo(f"Processed posts: {len(processed)}")
+        except Exception:
+            pass
+
+    # Show next scheduled post
+    if scheduled_data:
+        try:
+            from datetime import datetime
+            import pytz
+
+            now = datetime.now(pytz.timezone('America/New_York'))
+
+            # Find next unposted post
+            upcoming = []
+            for entry in scheduled_data:
+                if entry['filename'] not in processed_filenames:
+                    try:
+                        scheduled_time = datetime.fromisoformat(entry['time'])
+                        if scheduled_time >= now:
+                            upcoming.append((scheduled_time, entry['filename']))
+                    except Exception:
+                        pass
+
+            if upcoming:
+                upcoming.sort()
+                next_time, next_file = upcoming[0]
+                time_until = next_time - now
+
+                if time_until.days > 0:
+                    time_str = f"in {time_until.days}d {time_until.seconds//3600}h"
+                elif time_until.seconds >= 3600:
+                    time_str = f"in {time_until.seconds//3600}h {(time_until.seconds%3600)//60}m"
+                else:
+                    time_str = f"in {time_until.seconds//60}m"
+
+                click.echo(f"Next post: {next_time.strftime('%Y-%m-%d %H:%M')} ({time_str})")
+                click.echo(f"  {next_file[:60]}")
         except Exception:
             pass
 
@@ -562,12 +602,20 @@ def restart():
 
 
 @cli.command()
-def queue():
-    """View scheduled posts in the queue."""
+@click.option('--all', 'show_all', is_flag=True, help='Show both queued and posted items')
+@click.option('--posted', 'show_posted', is_flag=True, help='Show only posted items')
+def queue(show_all, show_posted):
+    """View scheduled posts in the queue.
+
+    By default, shows only posts that haven't been posted yet.
+    Use --all to see all scheduled posts (including already posted).
+    Use --posted to see only posts that have been completed.
+    """
     import json
     from datetime import datetime
 
     schedule_file = PROJECT_ROOT / "schedule.json"
+    processed_file = PROJECT_ROOT / "processed.json"
 
     if not schedule_file.exists():
         click.echo("No schedule file found")
@@ -577,16 +625,51 @@ def queue():
         with open(schedule_file) as f:
             scheduled = json.load(f)
 
+        # Load processed posts to filter them out
+        processed_filenames = set()
+        processed_data = {}
+        if processed_file.exists():
+            try:
+                with open(processed_file) as f:
+                    processed = json.load(f)
+                    processed_filenames = {p['filename'] for p in processed}
+                    processed_data = {p['filename']: p for p in processed}
+            except Exception as e:
+                click.echo(f"Warning: Could not load processed.json: {e}", err=True)
+
         if not scheduled:
             click.echo("No posts currently scheduled")
             return
 
-        click.echo("Scheduled Posts Queue")
+        # Filter based on flags
+        if show_posted:
+            # Show only posted items
+            filtered = [e for e in scheduled if e.get('filename') in processed_filenames]
+            title = "Posted Items"
+        elif show_all:
+            # Show everything
+            filtered = scheduled
+            title = "All Scheduled Posts (Queued + Posted)"
+        else:
+            # Default: show only queued (not yet posted)
+            filtered = [e for e in scheduled if e.get('filename') not in processed_filenames]
+            title = "Queued Posts (Not Yet Posted)"
+
+        if not filtered:
+            if show_posted:
+                click.echo("No posts have been completed yet")
+            elif show_all:
+                click.echo("No posts currently scheduled")
+            else:
+                click.echo("Queue is empty - all scheduled posts have been completed")
+            return
+
+        click.echo(title)
         click.echo("=" * 60)
         click.echo()
 
         now = datetime.now()
-        for i, entry in enumerate(scheduled, 1):
+        for i, entry in enumerate(filtered, 1):
             filename = entry.get('filename', 'Unknown')
             scheduled_time = entry.get('time', 'Unknown')
 
@@ -595,7 +678,7 @@ def queue():
                 dt = datetime.fromisoformat(scheduled_time)
                 time_str = dt.strftime('%a %b %d, %Y at %H:%M:%S %Z')
 
-                # Calculate time until post
+                # Calculate time until post (or time since posted)
                 time_diff = dt.replace(tzinfo=None) - now
                 if time_diff.total_seconds() > 0:
                     days = time_diff.days
@@ -609,15 +692,41 @@ def queue():
                     else:
                         countdown = f"in {minutes}m"
                 else:
-                    countdown = "overdue"
+                    # For posted items, show when they were actually posted
+                    if filename in processed_data:
+                        posted_at = processed_data[filename].get('timestamp', '')
+                        try:
+                            posted_dt = datetime.fromisoformat(posted_at)
+                            countdown = f"posted {posted_dt.strftime('%m-%d %H:%M')}"
+                        except Exception:
+                            countdown = "posted"
+                    else:
+                        countdown = "overdue"
 
                 time_str += f" ({countdown})"
             except Exception:
                 time_str = scheduled_time
 
-            click.echo(f"{i}. {filename}")
+            # Show status indicator
+            status = "✅" if filename in processed_filenames else "⏳"
+            click.echo(f"{i}. {status} {filename}")
             click.echo(f"   Scheduled: {time_str}")
+
+            # Show Instagram URL for posted items
+            if filename in processed_data:
+                url = processed_data[filename].get('url', '')
+                if url:
+                    click.echo(f"   URL: {url}")
+
             click.echo()
+
+        # Show summary
+        total_scheduled = len(scheduled)
+        total_posted = len(processed_filenames)
+        total_queued = total_scheduled - len([s for s in scheduled if s['filename'] in processed_filenames])
+
+        click.echo("=" * 60)
+        click.echo(f"Total: {len(filtered)} shown | {total_queued} queued | {total_posted} posted | {total_scheduled} scheduled")
 
     except Exception as e:
         click.echo(f"Error reading schedule: {e}", err=True)
@@ -1063,6 +1172,146 @@ def uninstall_launchd_cmd():
     click.echo()
     click.echo("Note: Services must now be managed manually.")
     click.echo("Use 'instapost start/stop' to control them.")
+
+
+@cli.command()
+@click.option('--orphaned', is_flag=True, help='Remove schedule entries for files that no longer exist')
+@click.option('--dry-run', is_flag=True, help='Show what would be removed without actually removing')
+@click.option('--backup', is_flag=True, help='Remove old .backup.backup files (multiple backup extensions)')
+def cleanup(orphaned, dry_run, backup):
+    """Clean up orphaned entries and files.
+
+    Examples:
+        instapost cleanup --orphaned           # Remove orphaned schedule entries
+        instapost cleanup --orphaned --dry-run # Preview what would be removed
+        instapost cleanup --backup             # Remove files with multiple .backup extensions
+    """
+    import json
+    from pathlib import Path
+
+    if not orphaned and not backup:
+        click.echo("Error: Specify at least one cleanup option (--orphaned or --backup)", err=True)
+        click.echo("Run 'instapost cleanup --help' for usage", err=True)
+        sys.exit(1)
+
+    click.echo("InstaPost Cleanup")
+    click.echo("=" * 60)
+    click.echo()
+
+    if dry_run:
+        click.echo("🔍 DRY RUN MODE - No changes will be made")
+        click.echo()
+
+    # Cleanup orphaned schedule entries
+    if orphaned:
+        click.echo("Checking for orphaned schedule entries...")
+        schedule_file = PROJECT_ROOT / "schedule.json"
+
+        if not schedule_file.exists():
+            click.echo("⚠️  schedule.json not found")
+        else:
+            try:
+                with open(schedule_file) as f:
+                    schedule = json.load(f)
+
+                # Get all existing files
+                images_dir = PROJECT_ROOT / "images"
+                processed_dir = PROJECT_ROOT / "processed"
+                existing_files = set()
+
+                if images_dir.exists():
+                    existing_files.update(f.name for f in images_dir.iterdir() if f.is_file())
+                if processed_dir.exists():
+                    existing_files.update(f.name for f in processed_dir.iterdir() if f.is_file())
+
+                # Find orphaned entries
+                orphaned_entries = [
+                    e for e in schedule
+                    if e['filename'] not in existing_files
+                    and not Path(e.get('original_path', '')).exists()
+                ]
+
+                if not orphaned_entries:
+                    click.echo("✅ No orphaned entries found")
+                else:
+                    click.echo(f"Found {len(orphaned_entries)} orphaned entries:")
+                    click.echo()
+
+                    for entry in orphaned_entries[:10]:
+                        click.echo(f"  - {entry['filename']}")
+                    if len(orphaned_entries) > 10:
+                        click.echo(f"  ... and {len(orphaned_entries) - 10} more")
+
+                    click.echo()
+
+                    if dry_run:
+                        click.echo(f"Would remove {len(orphaned_entries)} entries from schedule.json")
+                    else:
+                        # Create backup
+                        from datetime import datetime
+                        backup_file = schedule_file.with_suffix(f'.{datetime.now():%Y%m%d_%H%M%S}.backup.json')
+                        import shutil
+                        shutil.copy(schedule_file, backup_file)
+                        click.echo(f"📦 Backup created: {backup_file.name}")
+
+                        # Remove orphaned entries
+                        cleaned_schedule = [e for e in schedule if e not in orphaned_entries]
+
+                        with open(schedule_file, 'w') as f:
+                            json.dump(cleaned_schedule, f, indent=2)
+
+                        click.echo(f"✅ Removed {len(orphaned_entries)} orphaned entries")
+                        click.echo(f"   Schedule: {len(schedule)} → {len(cleaned_schedule)} entries")
+
+            except Exception as e:
+                click.echo(f"❌ Error processing schedule.json: {e}", err=True)
+                sys.exit(1)
+
+        click.echo()
+
+    # Cleanup backup files
+    if backup:
+        click.echo("Checking for .backup.backup files...")
+        images_dir = PROJECT_ROOT / "images"
+
+        if not images_dir.exists():
+            click.echo("⚠️  images/ directory not found")
+        else:
+            backup_files = list(images_dir.glob('*.backup.backup*'))
+
+            if not backup_files:
+                click.echo("✅ No multi-backup files found")
+            else:
+                click.echo(f"Found {len(backup_files)} multi-backup files:")
+                click.echo()
+
+                for f in backup_files[:10]:
+                    click.echo(f"  - {f.name}")
+                if len(backup_files) > 10:
+                    click.echo(f"  ... and {len(backup_files) - 10} more")
+
+                click.echo()
+
+                if dry_run:
+                    click.echo(f"Would remove {len(backup_files)} files from filesystem")
+                else:
+                    removed = 0
+                    for backup_file in backup_files:
+                        try:
+                            backup_file.unlink()
+                            removed += 1
+                        except Exception as e:
+                            click.echo(f"  ❌ Failed to remove {backup_file.name}: {e}", err=True)
+
+                    click.echo(f"✅ Removed {removed} multi-backup files from filesystem")
+
+    click.echo()
+    click.echo("=" * 60)
+    if dry_run:
+        click.echo("✅ Dry run complete - no changes made")
+        click.echo("Run without --dry-run to apply changes")
+    else:
+        click.echo("✅ Cleanup complete!")
 
 
 def main():

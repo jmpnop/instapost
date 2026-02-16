@@ -427,16 +427,19 @@ uv run instapost health         # Проверка здоровья систем
 # Статус показывает:
 #  - PID демонов и время работы
 #  - Возраст сердцебиения (обнаруживает зависшие процессы)
+#  - Следующий запланированный пост с обратным отсчетом
 #  - Режим управления (launchd vs ручной)
 ```
 
 ### Управление очередью
 ```bash
-instapost queue                              # Просмотр запланированных постов
-instapost cancel <filename>                  # Удалить из расписания
-instapost reschedule <filename> <new-time>   # Изменить время публикации
-instapost rebalance                          # Предпросмотр оптимизации расписания
-instapost rebalance --apply                  # Оптимизировать расписание (заполнить пропуски)
+uv run instapost queue                              # Просмотр постов в очереди (еще не опубликованы)
+uv run instapost queue --posted                     # Просмотр опубликованных постов с URL
+uv run instapost queue --all                        # Просмотр всех (в очереди + опубликованные)
+uv run instapost cancel <filename>                  # Удалить из расписания
+uv run instapost reschedule <filename> <new-time>   # Изменить время публикации
+uv run instapost rebalance                          # Предпросмотр оптимизации расписания
+uv run instapost rebalance --apply                  # Оптимизировать расписание (заполнить пропуски)
 ```
 
 ### Ребалансировка расписания
@@ -980,6 +983,16 @@ pip install \
 
 ### Очистка
 ```bash
+# Очистка осиротевших записей расписания (предпросмотр)
+uv run instapost cleanup --orphaned --dry-run
+
+# Удалить осиротевшие записи расписания (файлы, которых больше не существует)
+uv run instapost cleanup --orphaned
+
+# Удалить старые .backup.backup файлы
+uv run instapost cleanup --backup --dry-run  # Предпросмотр
+uv run instapost cleanup --backup            # Удалить
+
 # Удалите старые обработанные файлы (старше 30 дней)
 find processed/ -type f -mtime +30 -delete
 
