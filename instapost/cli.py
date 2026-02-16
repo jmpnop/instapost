@@ -1247,13 +1247,6 @@ def cleanup(orphaned, dry_run, backup):
                     if dry_run:
                         click.echo(f"Would remove {len(orphaned_entries)} entries from schedule.json")
                     else:
-                        # Create backup
-                        from datetime import datetime
-                        backup_file = schedule_file.with_suffix(f'.{datetime.now():%Y%m%d_%H%M%S}.backup.json')
-                        import shutil
-                        shutil.copy(schedule_file, backup_file)
-                        click.echo(f"📦 Backup created: {backup_file.name}")
-
                         # Remove orphaned entries
                         cleaned_schedule = [e for e in schedule if e not in orphaned_entries]
 
