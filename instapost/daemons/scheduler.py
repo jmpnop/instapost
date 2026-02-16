@@ -371,6 +371,14 @@ def process_scheduled_posts():
             logger.error("❌ Invalid schedule format - treating as empty")
             scheduled = []
 
+        # Filter out already-processed entries
+        processed_filenames = {p['filename'] for p in processed} if processed else set()
+        original_count = len(scheduled)
+        scheduled = [entry for entry in scheduled if entry.get('filename') not in processed_filenames]
+
+        if original_count > len(scheduled):
+            logger.debug(f"🧹 Filtered out {original_count - len(scheduled)} already-processed entries")
+
         if not scheduled:
             if last_schedule_count > 0:
                 logger.info("📭 Schedule is now empty")
@@ -399,11 +407,10 @@ def process_scheduled_posts():
         logger.debug(f"🔍 Found {len(scheduled)} scheduled posts to check")
 
         now = datetime.now(TIMEZONE)
-        # Build set from processed.json AND currently_processing global set
-        processed_filenames = {p['filename'] for p in processed} if processed else set()
+        # Add currently_processing to the already-built processed_filenames set
         processed_filenames.update(currently_processing)  # Include files being processed right now
-        
-        # Process entries that are due and not already processed
+
+        # Process entries that are due (already filtered for non-processed)
         for entry in scheduled[:]:  # Create a copy to safely modify the list
             try:
                 filename = entry.get('filename')
